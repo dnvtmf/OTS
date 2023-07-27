@@ -2,7 +2,7 @@ import time
 from collections import defaultdict
 import torch
 
-from extension.utils.str_utils import time2str
+from tree_segmentation.extension.utils.str_utils import time2str
 
 __all__ = ['TimeEstimator', 'TimeWatcher']
 

@@ -156,7 +156,7 @@ def save_mtl(file: Union[str, Path], *mtls: Union[MTL, dict], texture_dir=None):
 
 
 def test():
-    from extension.utils import show_shape
+    from tree_segmentation.extension.utils import show_shape
     mtls = load_mtl('/home/wan/data/meshes/lego/lego.mtl')
     for mtl in mtls:
         for key in mtl.__dir__():

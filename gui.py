@@ -7,6 +7,7 @@ from pathlib import Path
 from time import time, sleep
 from typing import Union
 import gc
+from rich.console import Console
 
 import cv2
 import dearpygui.dearpygui as dpg
@@ -14,35 +15,15 @@ import numpy as np
 import torch
 from torch import Tensor
 
-from extension import utils
-from extension import ops_3d
-from extension.utils import ImageViewer, Viewer3D
 import tree_segmentation
+from tree_segmentation.extension import utils
+from tree_segmentation.extension import ops_3d
+from tree_segmentation.extension.utils import ImageViewer, Viewer3D
 from tree_segmentation import Tree3D, Tree3Dv2, MaskData, TreeData
 from tree_segmentation.tree_3d import TreeSegment
 from tree_segmentation.util import color_mask, image_add_mask_boundary, image_add_points
 
-
-def get_colored_masks(*masks):
-    all_masks = []
-    for mask in masks:
-        if isinstance(mask, (tree_segmentation.TreeData, tree_segmentation.MaskData)):
-            mask = mask['masks']
-        elif isinstance(mask, dict):
-            mask = mask['segmentation']
-        if isinstance(mask, torch.Tensor):
-            mask = mask.cpu().numpy()
-        if mask.ndim == 2:
-            all_masks.append(mask[None])
-        else:
-            assert mask.ndim == 3
-            all_masks.append(mask)
-    if len(all_masks) == 0:
-        return None
-    else:
-        all_masks = np.concatenate(all_masks, axis=0)
-        one_mask = np.sum(all_masks.astype(np.uint8) * np.arange(1, all_masks.shape[0] + 1)[:, None, None], axis=0)
-    return color_mask(one_mask, len(all_masks))
+console = Console()
 
 
 def fit_window(mask: Tensor, region=0.95):
@@ -67,22 +48,21 @@ class TreeSegmentGUI(TreeSegment):
     def __init__(self, model=None) -> None:
         super().__init__(None, model=model)
         self._mode = 'S3D'
+        self._mesh_history = []  # The path of last 10 loaded meshes
         self.image_dir = Path('~/Pictures').expanduser()
         self.image_index = 0
         self.image_paths = []
 
-        self.load_ini()
+        dpg.create_context()
+        # self.set_default_font()
+        dpg.create_viewport(title='Tree Segmentation', width=1024, height=1024, x_pos=800, y_pos=256, resizable=False)
 
+        self.load_ini()
         self.now_level_2d = 0
         self._now_level_3d = 0
         self.last_time = time()
         self._loading_mesh = False
         self._choose_mask = None
-
-        dpg.create_context()
-        # self.set_default_font()
-        if not dpg.is_viewport_ok():
-            dpg.create_viewport(title='3D Tree Segment', width=1024, height=1024, x_pos=800, y_pos=256, resizable=False)
 
         with dpg.theme() as self.choose_theme:
             with dpg.theme_component(dpg.mvAll):
@@ -128,6 +108,7 @@ class TreeSegmentGUI(TreeSegment):
             self.make_show_tree_2d_mask_level()
             self.make_show_tree_3d_mask_level()
         dpg.set_primary_window('Primary Window', True)
+        dpg.set_exit_callback(self.callback_exit)
         with dpg.handler_registry():
             dpg.add_mouse_drag_handler(callback=self.view_3d.callback_mouse_drag)
             dpg.add_mouse_wheel_handler(callback=self.view_3d.callback_mouse_wheel)
@@ -135,7 +116,6 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_mouse_move_handler(callback=self.callback_mouse_hover)
             dpg.add_mouse_click_handler(callback=self.callback_mouse_click)
             dpg.add_key_press_handler(callback=self.callback_keypress)
-
         self.view_3d.enable_dynamic_change()
         self.view_2d.enable_dynamic_change()
         self.view_seg.enable_dynamic_change()
@@ -347,11 +327,27 @@ class TreeSegmentGUI(TreeSegment):
         if self._choose_mask is not None and dpg.does_item_exist(f"tree_{self._choose_mask}"):
             dpg.bind_item_theme(f"tree_{self._choose_mask}", self.choose_theme)
 
-    def load_mesh(self, obj_path, use_cache=False, cache_suffix='.mesh_cache'):
+    def load_mesh(self, obj_path, use_cache=True, cache_suffix='.mesh_cache'):
         self._loading_mesh = True
-        super().load_mesh(obj_path, use_cache, cache_suffix)
-        dpg.set_item_label('load_data', f"Load ({len(list(self.cache_dir.glob('*.data')))})")
-        self.view_3d.need_update = True
+        if self.get_value('mesh_load_all', False) and os.path.isfile(obj_path):
+            obj_path = Path(obj_path).parent
+        if dpg.get_value('mesh_load_force'):
+            use_cache = 'force'
+            dpg.set_value('mesh_load_force', False)
+        if super().load_mesh(obj_path, use_cache, cache_suffix):
+            obj_path = str(obj_path)
+            if obj_path not in self._mesh_history:
+                self._mesh_history.append(obj_path)
+                if len(self._mesh_history) > 10:
+                    self._mesh_history.pop(0)
+            else:
+                self._mesh_history.remove(obj_path)
+                self._mesh_history.append(obj_path)
+            for i, path in enumerate(reversed(self._mesh_history)):
+                dpg.set_value(f"history_{i}", path)
+            # dpg.configure_item('mesh_history_list', items=self._mesh_history)
+            dpg.set_item_label('load_data', f"Load ({len(list(self.cache_dir.glob('*.data')))})")
+            self.view_3d.need_update = True
         self._loading_mesh = False
         self.save_ini()
 
@@ -697,93 +693,6 @@ class TreeSegmentGUI(TreeSegment):
     def show_uv_results(self):
         pass
 
-    def make_control_panel(self):
-        with dpg.group(horizontal=True):
-            dpg.add_button(label='Edit 2D', tag='E2D', width=60, height=30, callback=self._set_value('mode', 'E2D'))
-            dpg.add_button(label='Edit 3D', tag='E3D', width=60, height=30, callback=self._set_value('mode', 'E3D'))
-            dpg.add_button(label='Seg 3D', tag='S3D', width=60, height=30, callback=self._set_value('mode', 'S3D'))
-            dpg.bind_item_theme('E2D', self.default_theme)
-            dpg.bind_item_theme('E3D', self.default_theme)
-            dpg.bind_item_theme('S3D', self.default_theme)
-
-            # dpg.add_text('Model')
-            dpg.add_button(label=self._model_type, tag='change_model', height=30)
-
-            def change_model(name='SAM'):
-                def change(*args):
-                    if self._model_type != name:
-                        self._predictor = None
-                        self._model = None
-                    dpg.configure_item('win_change_model', show=False)
-                    self._model_type = name
-                    dpg.configure_item('change_model', label=self._model_type)
-                    print(f'[GUI] change model to {self._model_type}')
-                    self.save_ini()
-                    return
-
-                return change
-
-            with dpg.popup(dpg.last_item(), mousebutton=dpg.mvMouseButton_Left, modal=False, tag='win_change_model'):
-                dpg.add_button(label='SAM', callback=change_model('SAM'))
-                dpg.add_button(label='Semantic-SAM-L', callback=change_model('Semantic-SAM-L'))
-                dpg.add_button(label='Semantic-SAM-T', callback=change_model('Semantic-SAM-T'))
-
-            self.make_bottom_status_options()
-        dpg.add_separator()
-        with dpg.collapsing_header(label="3D Viewer", default_open=False, tag='ctl_view_3d'):
-            with dpg.group(horizontal=True):
-                dpg.add_text('fovy')
-                dpg.add_slider_float(
-                    min_value=15.,
-                    max_value=180.,
-                    default_value=math.degrees(self.view_3d.fovy),
-                    callback=lambda *args: self.view_3d.set_fovy(dpg.get_value('set_fovy')),
-                    tag='set_fovy'
-                )
-
-            def change_eye(*args):
-                print('change camera position', args)
-                self.view_3d.eye = self.view_3d.eye.new_tensor([
-                    dpg.get_value(item) for item in ['eye_x', 'eye_y', 'eye_z']
-                ])
-                self.view_3d.need_update = True
-
-            with dpg.group(horizontal=True):
-                dpg.add_text('camera pos:')
-                dpg.add_button(label='change', callback=change_eye)
-
-            with dpg.group(horizontal=True):
-                dpg.add_text('x')
-                dpg.add_input_float(tag='eye_x', width=100)
-                dpg.add_text('y')
-                dpg.add_input_float(tag='eye_y', width=100)
-                dpg.add_text('z')
-                dpg.add_input_float(tag='eye_z', width=100)
-
-        with dpg.collapsing_header(label='Predictor Options', default_open=False, tag='ctl_predictor'):
-            self.make_predictor_options()
-        with dpg.collapsing_header(label='Edit 2D Options', default_open=True, tag='ctl_edit_2d'):
-            self.make_edit_2d_options()
-        with dpg.collapsing_header(label='2D Tree Segmentation Options', default_open=True, tag='ctl_tree_2d'):
-            self.make_2d_tree_segmentatin_options()
-        with dpg.collapsing_header(label='3D Tree Segmentation Options', default_open=True, tag='ctl_tree_3d'):
-            self.make_3d_tree_segmentation_options()
-        with dpg.collapsing_header(label='3D Edit Options', default_open=True, tag='ctl_edit_3d', show=False):
-            self.make_3d_edit_options()
-
-        def fit_callback():
-            if self.Tw2v is None:
-                return
-            Tv2w = self.Tw2v.inverse()
-            scale = fit_window(self.tri_id)
-            print('[GUI] scale=', scale)
-            Tv2w[:3, 3] *= scale
-            self.new_camera_pose(Tw2v=Tv2w.inverse())
-
-        # dpg.add_button(label='Fit', callback=fit_callback)
-
-        dpg.add_collapsing_header(label='root', tag='tree_0', show=False)
-
     def callback_mouse_hover(self, sender, app_data):
         if dpg.is_item_hovered(self.view_3d.image_tag):
             if self.now_level_3d == 0:
@@ -944,6 +853,98 @@ class TreeSegmentGUI(TreeSegment):
             if self.mode == 'E3D':
                 self.view_3d.need_update = True
 
+    def callback_exit(self):
+        self.save_ini()
+        dpg.minimize_viewport()
+        console.print(f"[red]Debug callback exit")
+
+    def make_control_panel(self):
+        with dpg.group(horizontal=True):
+            dpg.add_button(label='Edit 2D', tag='E2D', width=60, height=30, callback=self._set_value('mode', 'E2D'))
+            dpg.add_button(label='Edit 3D', tag='E3D', width=60, height=30, callback=self._set_value('mode', 'E3D'))
+            dpg.add_button(label='Seg 3D', tag='S3D', width=60, height=30, callback=self._set_value('mode', 'S3D'))
+            dpg.bind_item_theme('E2D', self.default_theme)
+            dpg.bind_item_theme('E3D', self.default_theme)
+            dpg.bind_item_theme('S3D', self.default_theme)
+
+            # dpg.add_text('Model')
+            dpg.add_button(label=self._model_type, tag='change_model', height=30)
+
+            def change_model(name='SAM'):
+                def change(*args):
+                    if self._model_type != name:
+                        self._predictor = None
+                        self._model = None
+                    dpg.configure_item('win_change_model', show=False)
+                    self._model_type = name
+                    dpg.configure_item('change_model', label=self._model_type)
+                    print(f'[GUI] change model to {self._model_type}')
+                    self.save_ini()
+                    return
+
+                return change
+
+            with dpg.popup(dpg.last_item(), mousebutton=dpg.mvMouseButton_Left, modal=False, tag='win_change_model'):
+                dpg.add_button(label='SAM', callback=change_model('SAM'))
+                dpg.add_button(label='Semantic-SAM-L', callback=change_model('Semantic-SAM-L'))
+                dpg.add_button(label='Semantic-SAM-T', callback=change_model('Semantic-SAM-T'))
+
+            self.make_bottom_status_options()
+        dpg.add_separator()
+        with dpg.collapsing_header(label="3D Viewer", default_open=False, tag='ctl_view_3d'):
+            with dpg.group(horizontal=True):
+                dpg.add_text('fovy')
+                dpg.add_slider_float(
+                    min_value=15.,
+                    max_value=180.,
+                    default_value=math.degrees(self.view_3d.fovy),
+                    callback=lambda *args: self.view_3d.set_fovy(dpg.get_value('set_fovy')),
+                    tag='set_fovy'
+                )
+
+            def change_eye(*args):
+                print('change camera position', args)
+                self.view_3d.eye = self.view_3d.eye.new_tensor([
+                    dpg.get_value(item) for item in ['eye_x', 'eye_y', 'eye_z']
+                ])
+                self.view_3d.need_update = True
+
+            with dpg.group(horizontal=True):
+                dpg.add_text('camera pos:')
+                dpg.add_button(label='change', callback=change_eye)
+
+            with dpg.group(horizontal=True):
+                dpg.add_text('x')
+                dpg.add_input_float(tag='eye_x', width=100)
+                dpg.add_text('y')
+                dpg.add_input_float(tag='eye_y', width=100)
+                dpg.add_text('z')
+                dpg.add_input_float(tag='eye_z', width=100)
+
+        with dpg.collapsing_header(label='Predictor Options', default_open=False, tag='ctl_predictor'):
+            self.make_predictor_options()
+        with dpg.collapsing_header(label='Edit 2D Options', default_open=True, tag='ctl_edit_2d'):
+            self.make_edit_2d_options()
+        with dpg.collapsing_header(label='2D Tree Segmentation Options', default_open=True, tag='ctl_tree_2d'):
+            self.make_2d_tree_segmentatin_options()
+        with dpg.collapsing_header(label='3D Tree Segmentation Options', default_open=True, tag='ctl_tree_3d'):
+            self.make_3d_tree_segmentation_options()
+        with dpg.collapsing_header(label='3D Edit Options', default_open=True, tag='ctl_edit_3d', show=False):
+            self.make_3d_edit_options()
+
+        def fit_callback():
+            if self.Tw2v is None:
+                return
+            Tv2w = self.Tw2v.inverse()
+            scale = fit_window(self.tri_id)
+            print('[GUI] scale=', scale)
+            Tv2w[:3, 3] *= scale
+            self.new_camera_pose(Tw2v=Tv2w.inverse())
+
+        # dpg.add_button(label='Fit', callback=fit_callback)
+
+        dpg.add_collapsing_header(label='root', tag='tree_0', show=False)
+
     def make_predictor_options(self):
         with dpg.group(horizontal=True):
             dpg.add_text('Threshold: iou=')
@@ -1067,15 +1068,38 @@ class TreeSegmentGUI(TreeSegment):
             # print('need update view3d')
 
         with dpg.file_dialog(
-            directory_selector=True,
+            # directory_selector=False,
             show=False,
-            callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name'], use_cache=True),
+            callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
             id="choose_mesh",
             width=700,
             height=400,
             default_path='/home/wan/data/meshes',
+            modal=True,
         ):
             dpg.add_file_extension("Mesh{.obj,.ply}", custom_text='mesh')
+            with dpg.group(horizontal=True):
+                dpg.add_checkbox(tag='mesh_load_all')
+                dpg.add_text('Load all parts')
+                dpg.add_checkbox(tag='mesh_load_force')
+                dpg.add_text('force')
+            with dpg.child_window(tag='win_history'):
+                dpg.add_text('History')
+
+                def _choose_history(sender, app_data):
+                    # print(sender, app_data, dpg.get_value(app_data[1]))
+                    # dpg.set_value('history_detail', app_data)
+                    # print(dpg.get_item_configuration('choose_mesh'))
+                    self.load_mesh(dpg.get_value(app_data[1]))
+                    dpg.hide_item('choose_mesh')
+                    # dpg.configure_item('choose_mesh', default_filename=dpg.get_value(app_data[1]))
+
+                with dpg.item_handler_registry(tag='history_handler'):
+                    dpg.add_item_clicked_handler(button=dpg.mvMouseButton_Left, callback=_choose_history)
+
+                for i in range(10):
+                    dpg.add_text(tag=f'history_{i}', wrap=210)
+                    dpg.bind_item_handler_registry(f'history_{i}', 'history_handler')
 
         with dpg.group(horizontal=True):
             dpg.add_button(label='change mesh', callback=lambda: dpg.show_item("choose_mesh"))
@@ -1230,7 +1254,8 @@ class TreeSegmentGUI(TreeSegment):
 
         def show_level_callback(level):
             def show_level():
-                dpg.bind_item_theme(f"level{self.now_level_2d}", self.default_theme)
+                for i in range(10):
+                    dpg.bind_item_theme(f"level{i}", self.default_theme)
                 dpg.bind_item_theme(f"level{level}", self.choose_theme)
                 self.now_level_2d = level
                 if level == 0:
@@ -1423,6 +1448,8 @@ class TreeSegmentGUI(TreeSegment):
                 '_model_type': self._model_type,
                 'image_dir': self.image_dir.as_posix(),
                 'image_index': self.image_index,
+                'viewport_pos': dpg.get_viewport_pos(),
+                'mesh_history': self._mesh_history,
             }, f)
 
     def load_ini(self):
@@ -1436,8 +1463,11 @@ class TreeSegmentGUI(TreeSegment):
             self._mode = data['_mode']
             self._model_type = data['_model_type']
             self.image_dir = Path(data['image_dir'])
-            self.image_index = data['image_index']
+            self.image_index = data.get('image_index', 0)
             self.image_paths = [p.name for p in self.image_dir.glob('*') if p.suffix.lower() in utils.image_extensions]
+            print('viewport_pos:', data['viewport_pos'])
+            dpg.set_viewport_pos(data.get('viewport_pos', [0, 0]))
+            self._mesh_history = data.get('mesh_history', [])
         except KeyError as e:
             os.remove(ini_path)
             print(f'[GUI] delete ini file due to unexcepted key', e)

@@ -198,7 +198,7 @@ def R_to_lie_np(matrix: Tensor):
 def test():
     import pytorch3d.transforms
     from scipy.spatial.transform import Rotation
-    from extension import utils
+    from tree_segmentation.extension import utils
     torch.set_default_dtype(torch.float64)
     utils.set_printoptions(6)
     print()

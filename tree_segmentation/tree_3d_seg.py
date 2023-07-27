@@ -2,7 +2,7 @@ import torch
 from torch import Tensor
 from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
 
-from extension import Mesh
+from tree_segmentation.extension import Mesh
 from tree_segmentation.tree_2d_segmentation import TreeStructure
 
 

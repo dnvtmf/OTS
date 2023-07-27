@@ -243,7 +243,7 @@ def test():
     import pytorch3d.transforms
     from scipy.spatial.transform import Rotation
 
-    from extension import utils
+    from tree_segmentation.extension import utils
     utils.set_printoptions(6)
     print()
 

@@ -186,7 +186,7 @@ def draw_msra_gaussian(heatmap, center, sigma):
 
 
 def test_speed_for_gather_features():
-    import extension as ext
+    from tree_segmentation import extension as ext
     import torch.profiler
     print()
     ext.utils.set_printoptions()

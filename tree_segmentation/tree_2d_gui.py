@@ -9,8 +9,8 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from extension import utils
-from extension.utils import ImageViewer
+from tree_segmentation.extension import utils
+from tree_segmentation.extension.utils import ImageViewer
 from segment_anything.build_sam import Sam, build_sam
 import tree_segmentation
 from tree_segmentation.tree_2d_segmentation import MaskData, TreeData

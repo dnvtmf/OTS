@@ -17,7 +17,7 @@ import numpy as np
 from torch import Tensor
 import torch.nn.functional as F
 
-from extension.utils.torch_utils import to_tensor
+from tree_segmentation.extension.utils.torch_utils import to_tensor
 
 
 def _rotate(angle: Union[float, Tensor], device=None, a=0, b=1) -> Tensor:
@@ -241,7 +241,7 @@ def ortho(size=1., aspect=1.0, n=0.1, f=1000.0, device=None):
 
 
 def test():
-    from extension.utils import set_printoptions
+    from tree_segmentation.extension.utils import set_printoptions
     set_printoptions()
     print('fovy <--> focal:', fovy_to_focal_length(focal_length_to_fovy(10, 10), 10))
     # print(translate(0, 0, -torch.ones(2, 3)).cuda().shape)

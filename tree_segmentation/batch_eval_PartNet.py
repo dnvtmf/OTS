@@ -10,8 +10,8 @@ from tqdm import tqdm
 from rich.console import Console
 from rich.tree import Tree
 
-from extension import Mesh
-from extension import ops_3d
+from tree_segmentation.extension import Mesh
+from tree_segmentation.extension import ops_3d
 from semantic_sam import semantic_sam_l
 from tree_segmentation import Tree3Dv2, Tree3D, TreePredictor
 from tree_segmentation.metric import TreeSegmentMetric

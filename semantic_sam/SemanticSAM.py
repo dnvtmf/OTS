@@ -12,7 +12,7 @@ import torch.nn.functional as F
 
 from kornia.contrib import distance_transform
 
-from extension.utils import retry_if_cuda_oom, convert_pth, make_divisible
+from tree_segmentation.extension.utils import retry_if_cuda_oom, convert_pth, make_divisible
 from .mask_dino import IMaskDINOHead
 from .base import BackboneBase
 

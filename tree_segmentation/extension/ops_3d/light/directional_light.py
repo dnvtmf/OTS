@@ -1,7 +1,7 @@
 from typing import Union, Tuple
 import torch
 from torch import nn, Tensor
-from extension import utils
+from tree_segmentation.extension import utils
 from ..misc import normalize
 from .base import Light
 

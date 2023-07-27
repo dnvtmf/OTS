@@ -1,9 +1,9 @@
 import torch
 from torch import Tensor
 
-from extension.ops_3d.misc import dot, normalize
-from extension.utils.io.mesh import load_mesh
-from extension.structures.material_texture import Material, merge_materials
+from tree_segmentation.extension.ops_3d.misc import dot, normalize
+from tree_segmentation.extension.utils.io.mesh import load_mesh
+from tree_segmentation.extension.structures.material_texture import Material, merge_materials
 
 
 class Mesh:
@@ -41,8 +41,8 @@ class Mesh:
 
     @classmethod
     def load(cls, filename, mtl=True) -> 'Mesh':
-        data = load_mesh(filename, mtl=mtl)
-        from extension.utils import show_shape
+        data = load_mesh(filename, mtl=mtl, loader='my')
+        from tree_segmentation.extension.utils import show_shape
         print(show_shape(data))
         kwargs = {'v_pos': data['v_pos'], 'f_pos': data['f_pos']}
         if mtl and 'materials' in data and len(data['materials']) > 0:
@@ -61,7 +61,10 @@ class Mesh:
             kwargs['v_nrm'] = data['v_nrm']
             kwargs['f_nrm'] = data['f_nrm'] if 'f_nmr' in data else data['f_pos']
         if 'v_clr' in data:
-            kwargs['v_clr'] = data['v_clr']
+            v_clr = data['v_clr']
+            if v_clr.dtype == torch.uint8:
+                v_clr = v_clr.float() / 255.
+            kwargs['v_clr'] = v_clr
         return cls(**kwargs)
 
     def save(cls, filename):
@@ -109,7 +112,7 @@ class Mesh:
         return self
 
     def float(self):
-        for attr in ['v_pos', 'v_nrm', 'v_tex', 'v_tng']:
+        for attr in ['v_pos', 'v_nrm', 'v_tex', 'v_tng', 'v_clr']:
             v = getattr(self, attr)
             if v is not None:
                 v.float()

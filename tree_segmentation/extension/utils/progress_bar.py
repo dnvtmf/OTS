@@ -2,7 +2,7 @@
 import os
 import sys
 import time
-from extension.utils.str_utils import time2str
+from tree_segmentation.extension.utils.str_utils import time2str
 
 __all__ = ['ProgressBar']
 

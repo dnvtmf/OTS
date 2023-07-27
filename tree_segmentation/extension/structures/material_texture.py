@@ -7,9 +7,12 @@ import nvdiffrast.torch as dr
 import torch
 from torch import Tensor, nn
 
-from extension.ops_3d.misc import normalize
-from extension.utils.io.image import avg_pool_nhwc, load_image, rgb_to_srgb, save_image, scale_img_nhwc, srgb_to_rgb
-from extension.utils.io.material import MTL
+from tree_segmentation.extension.ops_3d.misc import normalize
+from tree_segmentation.extension.utils.io.image import (
+    avg_pool_nhwc, load_image, rgb_to_srgb, save_image,
+    scale_img_nhwc, srgb_to_rgb,
+)
+from tree_segmentation.extension.utils.io.material import MTL
 
 
 ######################################################################################

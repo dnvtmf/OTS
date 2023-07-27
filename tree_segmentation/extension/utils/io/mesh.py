@@ -281,7 +281,7 @@ def load_ply(filename: Path):
             if 'nx' in elem['names']:
                 data['v_nrm'] = _to_array(elem, ['nx', 'ny', 'nz'])
             if 'red' in elem['names']:
-                data['v_color'] = _to_array(elem, ['red', 'green', 'blue'], 'alpha')
+                data['v_clr'] = _to_array(elem, ['red', 'green', 'blue'], 'alpha')
             for name in elem['names']:
                 if name not in ['x', 'y', 'z', 'nx', 'ny', 'nz', 'red', 'green', 'blue', 'alpha']:
                     print(f'ply undealed atte {name} for vertex')
@@ -295,6 +295,7 @@ def load_ply(filename: Path):
             data['f_pos'] = np.array(f_pos, _ply_dtype_map[elem['dtypes'][0][1]][2])
         else:
             print('ply undealed element', elem['name'])
+    data = {k: torch.from_numpy(v) for k, v in data.items()}
     return data
 
 
@@ -317,7 +318,7 @@ def load_mesh(filepath, ext: str = None, loader='open3d', **kwargs):
         return trimesh.load(filepath, force='mesh')
     else:
         if ext == '.ply':
-            return load_ply(filepath, **kwargs)
+            return load_ply(filepath)
         elif ext == '.obj':
             return load_obj(filepath, **kwargs)
         else:

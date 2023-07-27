@@ -18,8 +18,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from extension.utils import LazyImport
-from extension.utils.io.image import load_image, save_image_raw
+from tree_segmentation.extension.utils import LazyImport
+from tree_segmentation.extension.utils.io.image import load_image, save_image_raw
 
 from ..misc import dot, normalize, reflect
 

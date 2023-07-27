@@ -10,10 +10,9 @@ import torch.nn.functional as F
 from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
 
 from scipy.optimize import linear_sum_assignment
-import extension as ext
-from extension import Mesh, utils
-from extension import ops_3d
-from tree_segmentation import TreeStructure, MaskData
+from tree_segmentation.extension import Mesh, utils
+from tree_segmentation.extension import ops_3d
+from tree_segmentation import TreeStructure, MaskData, extension as ext
 
 
 class Tree3D(TreeStructure):

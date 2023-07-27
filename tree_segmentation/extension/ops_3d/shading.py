@@ -70,7 +70,7 @@ def Blinn_Phong(
 @torch.no_grad()
 def test():
     from pathlib import Path
-    from extension import utils
+    from tree_segmentation.extension import utils
     from .. import ops_3d
     import nvdiffrast.torch as dr
     from ... import extension as ext

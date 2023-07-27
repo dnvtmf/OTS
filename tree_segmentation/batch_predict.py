@@ -13,7 +13,7 @@ from rich.progress import (
     TimeRemainingColumn,
 )
 
-from extension import utils
+from tree_segmentation.extension import utils
 from segment_anything import build_sam_vit_h
 from tree_segmentation.predictor import TreePredictor
 

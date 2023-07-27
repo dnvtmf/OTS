@@ -21,8 +21,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.utils.checkpoint as checkpoint
 
-from extension.utils import n_tuple
-from extension.utils.timm_utils import trunc_normal_
+from tree_segmentation.extension.utils import n_tuple
+from tree_segmentation.extension.utils.timm_utils import trunc_normal_
 from .base import BackboneBase
 
 
@@ -757,7 +757,7 @@ def SwinL(variant='base224_22K', **kwargs):
 
 
 def test():
-    from extension.utils import show_shape
+    from tree_segmentation.extension.utils import show_shape
     print()
     image_size = 512
     net = SwinB(variant='base384_22K', image_size=(384, 384))

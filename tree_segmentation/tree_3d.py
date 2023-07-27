@@ -10,12 +10,13 @@ import torch
 from torch import Tensor
 import xatlas
 
-from extension import Mesh, utils
-from extension import ops_3d
+from tree_segmentation.extension import Mesh, utils
+from tree_segmentation.extension import ops_3d
 from semantic_sam import SemanticSAM, semantic_sam_l
 import tree_segmentation as tree_segmentation
 from segment_anything.build_sam import Sam, build_sam
 from tree_segmentation import MaskData, TreeData, TreePredictor, Tree3D
+from tree_segmentation.render import render_mesh
 
 
 class TreeSegment:
@@ -25,9 +26,9 @@ class TreeSegment:
         self.device = torch.device('cuda:0')
         self.glctx = dr.RasterizeCudaContext()
         if self.cfg is None:
-            self.mesh_path = Path('~/data/meshes/tang_table/mesh_0_clean.obj')
+            self.mesh_path = Path('~/data/meshes/tang_table/mesh_0_clean.obj').expanduser()
         else:
-            self.mesh_path = Path(self.cfg.mesh)
+            self.mesh_path = Path(self.cfg.mesh).expanduser()
         self.cache_root = Path('./results')
         self.cache_root.mkdir(exist_ok=True)
         self.cache_dir = self.cache_root
@@ -180,8 +181,13 @@ class TreeSegment:
         return self._3d_aux_data
 
     def load_mesh(self, obj_path, use_cache=False, cache_suffix='.mesh_cache'):
-        self.mesh_path = Path(obj_path).expanduser()
-        print(str(self.mesh_path))
+        obj_path = Path(obj_path).expanduser()
+        if obj_path.is_dir():
+            part_paths = sorted(list(obj_path.glob('*.obj')))
+            if len(part_paths) == 0:
+                print(f"[GUI] There are no *.obj files in dir {self.mesh}")
+                return False
+        self.mesh_path = obj_path
         self.cache_dir = self.cache_root.joinpath(hashlib.md5(str(self.mesh_path).encode()).hexdigest())
         self.cache_dir.mkdir(exist_ok=True)
 
@@ -189,20 +195,21 @@ class TreeSegment:
         self.reset_3d()
         self.reset_2d()
 
-        print('[GUI] set cache dir:', self.cache_dir)
+        print(f'[GUI] set cache dir: {self.cache_dir}, use cache: {use_cache}')
         cache_file = self.cache_dir.joinpath(self.mesh_path.stem + cache_suffix)
-        if use_cache and cache_file.is_file():
+        if use_cache is True and cache_file.is_file():
             mesh = torch.load(cache_file, map_location=self.device)
             print('[GUI] Load from cache:', cache_file)
         else:
             if self.mesh_path.is_dir():
                 part_paths = sorted(list(self.mesh_path.glob('*.obj')))
-                assert len(part_paths) > 0
                 print(f"[GUI] Loaded {len(part_paths)} parts from dir '{self.mesh_path}'")
                 part_meshes = [Mesh.load(part_path, mtl=True) for part_path in part_paths]
                 mesh = Mesh.merge(*part_meshes)
             else:
                 mesh = Mesh.load(self.mesh_path)
+            mesh.float()
+            mesh.int()
             mesh = mesh.cuda().unit_size()
             if mesh.v_tex is not None:
                 mesh.compuate_normals_()
@@ -213,6 +220,7 @@ class TreeSegment:
                 print('[GUI] Save cached mesh:', cache_file)
             print(mesh)
         self._mesh = mesh
+        return True
 
     def reset_2d(self):
         print('[GUI] reset 2D')
@@ -233,43 +241,49 @@ class TreeSegment:
         if self._tree_3d is not None:
             self._tree_3d.reset()
 
-    @torch.no_grad()
     def render_mesh(self, Tw2v: Tensor, image_size=1024, light_location=(0, 2., 0.)):
-        mesh: Mesh = self.mesh
-        Tw2v = Tw2v.to(self.device)
-        camera_pos = Tw2v.inverse()[:3, 3]
-        view_direction = ops_3d.normalize(camera_pos)
-        lights = ops_3d.PointLight(
-            ambient_color=utils.n_tuple(0.5, 3),
-            diffuse_color=utils.n_tuple(1., 3),
-            specular_color=utils.n_tuple(0.3, 3),
-            device=self.device
+        return render_mesh(
+            self.glctx,
+            self.mesh,
+            Tw2v=Tw2v.to(self.device),
+            image_size=image_size,
+            light_location=light_location
         )
-        lights.location = camera_pos
-        fovy = self.get_value('fovy', math.radians(60))
-        Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=self.device)
-        v_pos = ops_3d.xfm(mesh.v_pos.float(), Tv2c @ Tw2v)
-        v_pos = v_pos[None] if v_pos.ndim == 2 else v_pos
-        rast, _ = dr.rasterize(self.glctx, v_pos, mesh.f_pos.int(), (image_size, image_size))
-        points, _ = dr.interpolate(mesh.v_pos[None], rast, mesh.f_pos.int())
-        # mask = rast[..., -1]>0
-        # print(utils.show_shape(points, Tw2c))
-        # z_w = ops_3d.xfm(points, Tw2c[:, None, :, :])
-        # print(utils.show_shape(z_w, rast, mask))
-        # print((rast[..., 2] - z_w[..., 2]/z_w[..., -1])[mask])
-        if mesh.f_tex is not None:
-            uv, uv_da = dr.interpolate(mesh.v_tex[None], rast, mesh.f_tex.int())
-            ka = dr.texture(mesh.material['ka'].data[..., :3].contiguous(), uv) if 'ka' in mesh.material else 0
-            kd = dr.texture(mesh.material['kd'].data[..., :3].contiguous(), uv) if 'kd' in mesh.material else 0
-            ks = dr.texture(mesh.material['ks'].data, uv) if 'ks' in mesh.material else 0
-            nrm = ops_3d.compute_shading_normal(mesh, camera_pos, rast, None)
-        else:
-            nrm = ops_3d.compute_shading_normal_face(mesh, camera_pos[None, None, None], rast, None)
-            ka, kd, ks = nrm.new_full((3,), 0.2), nrm.new_full((3,), 0.5), nrm.new_full((3,), 0.1)
-        images = ops_3d.Blinn_Phong(nrm, lights(points), view_direction, (ka, kd, ks)).clamp(0, 1)
-        images = dr.antialias(images, rast, v_pos, mesh.f_pos.int())
-        images = torch.where(rast[..., -1:] > 0, images, torch.ones_like(images))
-        return images[0, :, :, :3], rast[0, :, :, -1].int()
+        # mesh: Mesh = self.mesh
+        # Tw2v = Tw2v.to(self.device)
+        # camera_pos = Tw2v.inverse()[:3, 3]
+        # view_direction = ops_3d.normalize(camera_pos)
+        # lights = ops_3d.PointLight(
+        #     ambient_color=utils.n_tuple(0.5, 3),
+        #     diffuse_color=utils.n_tuple(1., 3),
+        #     specular_color=utils.n_tuple(0.3, 3),
+        #     device=self.device
+        # )
+        # lights.location = camera_pos
+        # fovy = self.get_value('fovy', math.radians(60))
+        # Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=self.device)
+        # v_pos = ops_3d.xfm(mesh.v_pos.float(), Tv2c @ Tw2v)
+        # v_pos = v_pos[None] if v_pos.ndim == 2 else v_pos
+        # rast, _ = dr.rasterize(self.glctx, v_pos, mesh.f_pos.int(), (image_size, image_size))
+        # points, _ = dr.interpolate(mesh.v_pos[None], rast, mesh.f_pos.int())
+        # # mask = rast[..., -1]>0
+        # # print(utils.show_shape(points, Tw2c))
+        # # z_w = ops_3d.xfm(points, Tw2c[:, None, :, :])
+        # # print(utils.show_shape(z_w, rast, mask))
+        # # print((rast[..., 2] - z_w[..., 2]/z_w[..., -1])[mask])
+        # if mesh.f_tex is not None:
+        #     uv, uv_da = dr.interpolate(mesh.v_tex[None], rast, mesh.f_tex.int())
+        #     ka = dr.texture(mesh.material['ka'].data[..., :3].contiguous(), uv) if 'ka' in mesh.material else 0
+        #     kd = dr.texture(mesh.material['kd'].data[..., :3].contiguous(), uv) if 'kd' in mesh.material else 0
+        #     ks = dr.texture(mesh.material['ks'].data, uv) if 'ks' in mesh.material else 0
+        #     nrm = ops_3d.compute_shading_normal(mesh, camera_pos, rast, None)
+        # else:
+        #     nrm = ops_3d.compute_shading_normal_face(mesh, camera_pos[None, None, None], rast, None)
+        #     ka, kd, ks = nrm.new_full((3,), 0.2), nrm.new_full((3,), 0.5), nrm.new_full((3,), 0.1)
+        # images = ops_3d.Blinn_Phong(nrm, lights(points), view_direction, (ka, kd, ks)).clamp(0, 1)
+        # images = dr.antialias(images, rast, v_pos, mesh.f_pos.int())
+        # images = torch.where(rast[..., -1:] > 0, images, torch.ones_like(images))
+        # return images[0, :, :, :3], rast[0, :, :, -1].int()
 
     @torch.no_grad()
     def rendering(self, Tw2v, fovy=None, size=(1024, 1024)):

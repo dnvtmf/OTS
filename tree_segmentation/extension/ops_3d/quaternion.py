@@ -141,7 +141,7 @@ def standardize(quaternions: Tensor) -> Tensor:
 
 
 def test():
-    from extension import utils
+    from tree_segmentation.extension import utils
     utils.set_printoptions()
     print()
     q1 = normalize(torch.randn(10, 4))
@@ -167,7 +167,7 @@ def test():
     from scipy.spatial.transform import Rotation
     print(Rotation.from_quat(q.numpy()).as_matrix())
     print(Rotation.from_quat(q.numpy()).as_euler('xyz', degrees=True))
-    from extension.ops_3d.coord_trans import rotate_x
+    from tree_segmentation.extension.ops_3d.coord_trans import rotate_x
     print(rotate_x(theta))
     points = torch.randn(10, 3)
     print(xfm(points, q[None]) - points @ R.T)

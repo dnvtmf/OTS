@@ -135,7 +135,7 @@ class TreeMaskDecoder(nn.Module):
 
 
 def test():
-    from extension.utils import show_shape
+    from tree_segmentation.extension.utils import show_shape
     m = TreeMaskDecoder(image_embedding_size=(64, 64))
     print(m)
     mask = torch.zeros((2, 1, 256, 256))

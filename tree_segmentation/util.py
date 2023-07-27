@@ -9,7 +9,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from tree_segmentation import TreeData, MaskData, Tree3Dv2, Tree3D
-from extension import utils
+from tree_segmentation.extension import utils
 
 
 def color_mask(mask: np.ndarray, max_value=None):

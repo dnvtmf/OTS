@@ -6,7 +6,7 @@ import torch
 import tree_segmentation
 import gui
 
-import extension
+from tree_segmentation import extension
 
 model = None
 torch.set_anomaly_enabled(True)

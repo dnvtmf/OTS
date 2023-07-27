@@ -2,7 +2,7 @@ import numpy as np
 import torch
 from torch import Tensor
 import torch.nn.functional as F
-from extension.utils.utils import extend_list, to_list
+from tree_segmentation.extension.utils.utils import extend_list, to_list
 
 __all__ = [
     'make_3d_grid', 'normalize', 'to_homo', 'dot', 'reflect', 'xfm', 'to_4x4', 'align_camera_poses',

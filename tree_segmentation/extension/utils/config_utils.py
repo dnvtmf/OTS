@@ -2,10 +2,10 @@ from typing import Any, Sequence
 from argparse import ArgumentParser
 from pathlib import Path
 
-from extension.utils.str_utils import str2bool, str2list, eval_str, str2dict
-from extension.utils.utils import extend_list, n_tuple
-from extension.utils.path import str2path
-from extension.utils.registry import Registry
+from tree_segmentation.extension.utils.str_utils import str2bool, str2list, eval_str, str2dict
+from tree_segmentation.extension.utils.utils import extend_list, n_tuple
+from tree_segmentation.extension.utils.path import str2path
+from tree_segmentation.extension.utils.registry import Registry
 
 __all__ = [
     'set_config_value', 'add_bool_option', 'add_registry_option', 'add_path_option', 'add_n_tuple_option',

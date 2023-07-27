@@ -31,7 +31,7 @@ def save_gif(filename: Path, images, fps=30, loop=0, **kwargs):
 
 
 def test():
-    from extension.utils import show_shape
+    from tree_segmentation.extension.utils import show_shape
     images, meta = load_video_meta(Path('~/Pictures/BvbFcCSsTv6Pd9BJpHvZfoK1W0KMraBi.gif'))
     print('\n', 'number of images:', len(images), type(images))
     print(show_shape(images))

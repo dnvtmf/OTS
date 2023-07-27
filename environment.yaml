@@ -43,6 +43,6 @@ dependencies:
             - open3d >= 0.15.2
             - trimesh[all]
             - transforms3d
-            - plyfile
+            #            - plyfile
             - kornia
             - imageio-ffmpeg

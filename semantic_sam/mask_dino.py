@@ -11,7 +11,7 @@ import torch.nn.functional as F
 from detectron2.layers import Conv2d, get_norm
 from torch import nn, autocast
 
-from extension.utils.timm_utils import trunc_normal_
+from tree_segmentation.extension.utils.timm_utils import trunc_normal_
 from .dino_decoder import (
     inverse_sigmoid,
     MLP,

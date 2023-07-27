@@ -213,7 +213,7 @@ def simple_3d_viewer(rendering, size=(400, 400)):
 def test():
     import torch
     import nvdiffrast.torch as dr
-    from extension import Mesh
+    from tree_segmentation.extension import Mesh
     from ... import ops_3d
     mesh_path = Path('~/data/meshes/spot/spot.obj').expanduser()
     mesh = Mesh.load(mesh_path)
