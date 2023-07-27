@@ -1,0 +1,16 @@
+[tool.isort]
+line_length = 120
+
+[tool.yapf]
+based_on_style = "yapf"
+column_limit = 120
+indent_width = 4
+JOIN_MULTIPLE_LINES = false
+SPLIT_BEFORE_CLOSING_BRACKET = true
+COALESCE_BRACKETS = true
+DEDENT_CLOSING_BRACKETS = true
+
+[tool.pytest.ini_options]
+filterwarnings = [
+    'ignore:.* is deprecated:DeprecationWarning',
+]

@@ -1,0 +1,277 @@
+import torch
+from torch import Tensor
+
+from extension.ops_3d.misc import dot, normalize
+from extension.utils.io.mesh import load_mesh
+from extension.structures.material_texture import Material, merge_materials
+
+
+class Mesh:
+    attr_names = ['v_pos', 'f_pos', 'v_nrm', 'f_nrm', 'v_tex', 'f_tex', 'v_tng', 'f_tng', 'v_clr', 'material']
+
+    def __init__(
+        self,
+        v_pos: Tensor = None,
+        f_pos: Tensor = None,
+        v_nrm: Tensor = None,
+        f_nrm: Tensor = None,
+        v_tex: Tensor = None,
+        f_tex: Tensor = None,
+        v_tng: Tensor = None,
+        f_tng: Tensor = None,
+        v_clr: Tensor = None,
+        material: Material = None,
+        base: 'Mesh' = None
+    ) -> None:
+        pass
+
+        self.v_pos = v_pos  # value of position
+        self.v_nrm = v_nrm  # value of vertices normal
+        self.v_tex = v_tex  # value of texture
+        self.v_tng = v_tng  # value of tangents
+        self.v_clr = v_clr  # value of vertices color
+        self.f_pos = f_pos  # faces of vertices
+        self.f_nrm = f_nrm  # faces of normal
+        self.f_tex = f_tex  # faces of texture
+        self.f_tng = f_tng  # faces of tangents
+        self.material = material
+
+        if base is not None:
+            self.copy_none(base)
+
+    @classmethod
+    def load(cls, filename, mtl=True) -> 'Mesh':
+        data = load_mesh(filename, mtl=mtl)
+        from extension.utils import show_shape
+        print(show_shape(data))
+        kwargs = {'v_pos': data['v_pos'], 'f_pos': data['f_pos']}
+        if mtl and 'materials' in data and len(data['materials']) > 0:
+            if len(data['materials']) > 1:
+                mtls = [Material.from_mtl(mtl) for mtl in data['materials']]
+                material, v_tex, f_tex = merge_materials(mtls, data['v_tex'], data['f_tex'], data['f_mat'])
+                data['v_tex'] = v_tex
+                data['f_tex'] = f_tex
+            else:
+                material = Material.from_mtl(data['materials'][0])
+            kwargs['material'] = material
+        if 'v_tex' in data:
+            kwargs['v_tex'] = data['v_tex']
+            kwargs['f_tex'] = data['f_tex']
+        if 'v_nrm' in data:
+            kwargs['v_nrm'] = data['v_nrm']
+            kwargs['f_nrm'] = data['f_nrm'] if 'f_nmr' in data else data['f_pos']
+        if 'v_clr' in data:
+            kwargs['v_clr'] = data['v_clr']
+        return cls(**kwargs)
+
+    def save(cls, filename):
+        raise NotImplementedError()
+
+    def copy_none(self, other):
+        for attr in self.attr_names:
+            v = getattr(self, attr)
+            if v is None:
+                setattr(self, attr, getattr(other, attr))
+
+    def clone(self):
+        kwargs = {'material': self.material}
+        for attr in ['v_pos', 'f_pos', 'v_nrm', 'f_nrm', 'v_tex', 'f_tex', 'v_tng', 'f_tng']:
+            v = getattr(self, attr)
+            if v is not None:
+                kwargs[attr] = v.clone().detach()
+        return Mesh(**kwargs)
+
+    def to(self, device=None, **kwargs):
+        for attr in self.attr_names:
+            v = getattr(self, attr)
+            if hasattr(v, 'to'):
+                setattr(self, attr, v.to(device, **kwargs))
+        return self
+
+    def cuda(self, device=None):
+        return self.to('cuda' if device is None else device)
+
+    def cpu(self):
+        return self.to('cpu')
+
+    def int(self):
+        for attr in ['f_pos', 'f_nrm', 'f_tex', 'f_tng']:
+            v = getattr(self, attr)
+            if v is not None:
+                v.int()
+        return self
+
+    def long(self):
+        for attr in ['f_pos', 'f_nrm', 'f_tex', 'f_tng']:
+            v = getattr(self, attr)
+            if v is not None:
+                v.long()
+        return self
+
+    def float(self):
+        for attr in ['v_pos', 'v_nrm', 'v_tex', 'v_tng']:
+            v = getattr(self, attr)
+            if v is not None:
+                v.float()
+        return self
+
+    def bound(self):
+        return torch.stack(self.v_pos.view(-1, 3).aminmax(dim=0), dim=0)
+
+    @property
+    def AABB(self):
+        return self.bound()
+
+    def compuate_normals_(self, force=False):
+        """Simple smooth vertex normal computation"""
+        if self.f_nrm is not None and self.f_nrm is not None and not force:  # skip when face normal exists!
+            return self
+        i0, i1, i2 = self.f_pos.unbind(-1)
+
+        v0 = self.v_pos[i0, :]
+        v1 = self.v_pos[i1, :]
+        v2 = self.v_pos[i2, :]
+
+        face_normals = torch.cross(v1 - v0, v2 - v0)
+
+        # Splat face normals to vertices
+        v_nrm = torch.zeros_like(self.v_pos)
+        v_nrm.scatter_add_(0, i0[:, None].repeat(1, 3), face_normals)
+        v_nrm.scatter_add_(0, i1[:, None].repeat(1, 3), face_normals)
+        v_nrm.scatter_add_(0, i2[:, None].repeat(1, 3), face_normals)
+
+        # Normalize, replace zero (degenerated) normals with some default value
+        v_nrm = torch.where(dot(v_nrm, v_nrm) > 1e-20, v_nrm, v_nrm.new_tensor([0.0, 0.0, 1.0]))
+        v_nrm = normalize(v_nrm, dim=-1)
+
+        if torch.is_anomaly_enabled():
+            assert torch.all(torch.isfinite(v_nrm))
+
+        self.v_nrm = v_nrm
+        self.f_nrm = self.f_pos.clone()
+        return self
+
+    def compuate_normals(self, force=False):
+        return Mesh(base=self).compuate_normals_(force)
+
+    def compute_tangents_(self, force=False):
+        """Compute tangent space from texture map coordinates
+        Follows http://www.mikktspace.com/ conventions
+        """
+        if self.f_tng is not None and self.v_tng is not None and not force:
+            return self
+        vn_idx = [self.v_pos[self.f_pos[:, i]] for i in range(0, 3)]
+        pos = [self.v_tex[self.f_tex[:, i]] for i in range(0, 3)]
+        tex = [self.f_nrm[:, i] for i in range(0, 3)]
+
+        tangents = torch.zeros_like(self.v_nrm)
+        tansum = torch.zeros_like(self.v_nrm)
+
+        # Compute tangent space for each triangle
+        uve1 = tex[1] - tex[0]
+        uve2 = tex[2] - tex[0]
+        pe1 = pos[1] - pos[0]
+        pe2 = pos[2] - pos[0]
+
+        nom = pe1 * uve2[..., 1:2] - pe2 * uve1[..., 1:2]
+        denom = uve1[..., 0:1] * uve2[..., 1:2] - uve1[..., 1:2] * uve2[..., 0:1]
+
+        # Avoid division by zero for degenerated texture coordinates
+        tang = nom / torch.where(denom > 0.0, torch.clamp(denom, min=1e-6), torch.clamp(denom, max=-1e-6))
+
+        # Update all 3 vertices
+        for i in range(0, 3):
+            idx = vn_idx[i][:, None].repeat(1, 3)
+            tangents.scatter_add_(0, idx, tang)  # tangents[n_i] = tangents[n_i] + tang
+            tansum.scatter_add_(0, idx, torch.ones_like(tang))  # tansum[n_i] = tansum[n_i] + 1
+
+        tangents = tangents / tansum.clamp(1)  # tansum == 0 means vertex is not used
+
+        # Normalize and make sure tangent is perpendicular to normal
+        tangents = normalize(tangents)
+        tangents = normalize(tangents - dot(tangents, self.v_nrm) * self.v_nrm)
+
+        if torch.is_anomaly_enabled():
+            assert torch.all(torch.isfinite(tangents))
+        self.v_tng = tangents
+        self.f_tng = self.f_nrm.clone()
+        return self
+
+    def compute_tangents(self, force=False):
+        return Mesh(base=self).compute_tangents_(force)
+
+    @torch.no_grad()
+    def unit_size(self):
+        """Align base mesh to reference mesh:move & rescale to match bounding boxes."""
+        vmin_max = self.AABB
+        scale = 2 / torch.max(vmin_max[1] - vmin_max[0]).item()
+        v_pos = self.v_pos - (vmin_max[1] + vmin_max[0]) / 2  # Center mesh on origin
+        v_pos = v_pos * scale  # Rescale to unit size
+        return Mesh(v_pos, base=self)
+
+    def center_by_reference(self, aabb=None, scale=2.):
+        """Center & scale mesh for rendering"""
+        if aabb is None:
+            aabb = self.AABB
+        center = (aabb[0] + aabb[1]) * 0.5
+        scale = scale / torch.max(aabb[1] - aabb[0]).item()
+        v_pos = (self.v_pos - center[None, ...]) * scale
+        return Mesh(v_pos, base=self)
+
+    def center_(self, aabb=None, scale=1.):
+        """Center & scale mesh for rendering"""
+        if aabb is None:
+            aabb = self.AABB
+        center = (aabb[0] + aabb[1]) * 0.5
+        self.v_pos = (self.v_pos - center[None, ...]) * scale
+        return self
+
+    def center(self, aabb=None, scale=1.):
+        return Mesh(base=self).center_(aabb, scale)
+
+    def __repr__(self) -> str:
+        s = [
+            f"vertices={len(self.v_pos)}", f"faces={len(self.f_pos)}", None if self.v_tex is None else 'tex',
+            None if self.v_nrm is None else 'nrm', None if self.v_tng is None else 'tng',
+            None if self.material is None else f"mat={list(self.material.keys())}"
+        ]
+        return f"{self.__class__.__name__}({', '.join(si for si in s if si is not None)})"
+
+    def merge(self, *meshes: 'Mesh'):
+        d = {'material': self.material}
+        for attr in ['pos', 'tex', 'nrm', 'tng']:
+            v = [getattr(self, f"v_{attr}")]  # vertex
+            f = [getattr(self, f"f_{attr}")]  # faces
+            if v[0] is None:
+                continue
+            n = v[0].shape[0]
+            for mesh_i in meshes:
+                if getattr(mesh_i, f"f_{attr}", None) is not None:
+                    f.append(getattr(mesh_i, f"f_{attr}") + n)
+                if getattr(mesh_i, f"v_{attr}", None) is not None:
+                    v.append(getattr(mesh_i, f"v_{attr}"))
+                    n += v[-1].shape[0]
+            if len(v) == len(meshes) + 1 and len(f) == len(meshes) + 1:
+                d[f"v_{attr}"] = torch.cat(v, dim=0)
+                d[f"f_{attr}"] = torch.cat(f, dim=0)
+        return Mesh(**d)
+
+
+def test():
+    class A:
+
+        def __init__(self, a=1) -> None:
+            self.a = a
+
+        def add(cls, *args):
+            a_sum = cls.a
+            for x in args:
+                a_sum += x.a
+            return A(a_sum)
+
+        def __repr__(self) -> str:
+            return f"A={self.a}"
+
+    As = [A(1), A(2), A(3)]
+    print(As[0].add(*As[1:]))
+    print(A.add(*As))
