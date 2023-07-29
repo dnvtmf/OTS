@@ -3,6 +3,8 @@ results
 temp.*
 weights/
 
+/type_hint/
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

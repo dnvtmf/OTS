@@ -21,7 +21,7 @@ from torch import Tensor, nn
 __all__ = ['to_tensor', 'tensor_to', 'convert_pth',
            'state_dict_strip_prefix_if_present', 'state_dict_add_prefix_if_not_present',
            'get_net', 'is_parallel', 'show_shape', 'set_printoptions', 'net_no_sync', 'get_GPU_memory',
-           'disabled_train', 'split_run'
+           'disabled_train', 'split_run', 'sum_losses'
            ]
 
 
@@ -109,7 +109,7 @@ def _no_grad_trunc_normal_(tensor: Tensor, mean: float, std: float, a: float, b:
 
         # Uniformly fill tensor with values from [lower, upper], then translate
         # to [2lower-1, 2upper-1].
-        tensor.uniform_(2 * lower - 1, 2 * upper - 1)
+        tensor.uniform_(2 * lower - 1, 2 * upper - 1)  # noqa
 
         # Use inverse cdf transform for normal distribution to get truncated
         # standard normal
@@ -289,10 +289,10 @@ def split_run(fn: T_fn, split_size=-1, **keep_kwargs) -> T_fn:
         if len(args) > 0:
             N = args[0].shape[0]
         elif len(kwargs) > 0:
-            N = next(kwargs.values()).shape[0]
+            N = next(kwargs.values()).shape[0]  # noqa
         else:
             N = 0
-        if split_size > 0 and N > split_size:
+        if 0 < split_size < N:
             results = []
             for i in range(0, N, split_size):
                 part_i_args = [x[i:i + split_size] if isinstance(x, Tensor) else x for x in args]
@@ -303,3 +303,10 @@ def split_run(fn: T_fn, split_size=-1, **keep_kwargs) -> T_fn:
             return fn(*args, **keep_kwargs, **kwargs)
 
     return wrapper
+
+
+def sum_losses(loss_dict: dict) -> Tensor:
+    total = 0
+    for k, v in loss_dict.items():
+        total = v + total
+    return total

@@ -2,7 +2,7 @@ import math
 import os
 import random
 from pathlib import Path
-from typing import List, Tuple, Optional, Sequence
+from typing import List, Tuple, Optional, Sequence, Dict
 
 import torch
 from torch import nn, Tensor
@@ -231,10 +231,10 @@ class Tree3D(TreeStructure):
                 for now in nodes:
                     self.score_node[now, 0] += 1
             self.update_tree()
-        print('num_nodes:',
-            sum(len(x) for x in self.get_levels()),
-            'num conflict:',
-            sum(len(x) for x in self.conflict_nodes), self.cnt)
+        print(
+            'num_nodes:', sum(len(x) for x in self.get_levels()), 'num conflict:',
+            sum(len(x) for x in self.conflict_nodes), self.cnt
+        )
         # self.node_rearrange()
         # self.print_tree()
 
@@ -778,7 +778,7 @@ class Tree3Dv2(TreeStructure):
             losses['recon'] = F.binary_cross_entropy_with_logits(masks_pred, masks_gt)
             metric.update(losses)
             opt.zero_grad()
-            sum(losses.values()).backward()
+            utils.sum_losses(losses).backward()
             opt.step()
             lr_scheduler.step()
             if epoch % 100 == 0:
@@ -925,7 +925,13 @@ class Tree3Dv2(TreeStructure):
         }
         return losses
 
-    def calc_losses(self, logits: Tensor, node_logits: Tensor, view_index: int, eps=1e-7):
+    def calc_losses(
+        self,
+        logits: Tensor,
+        node_logits: Tensor,
+        view_index: int,
+        eps=1e-7
+    ) -> Dict[str, Tensor]:
         s, e = self.view_range[view_index]
         # print(f'view_index: {view_index}, range: [{s}, {e})')
         P = logits.softmax(dim=1)
@@ -941,7 +947,7 @@ class Tree3Dv2(TreeStructure):
         # print(inter.shape, now_area.shape, now_area_2.shape, (now_area_2 - now_area).abs().max())
         mask_areas = (self.face_masks[s:e, 1:] * self.area).sum(dim=-1)  # shape: [Nv] 可以预处理
 
-        losses = {}
+        losses = {}  # type: Dict[str, Tensor]
         match_score = 2. * inter / (now_area + mask_areas[None, :]).clamp_min(eps)  # dice score, shape: [C, Nv]
         # print('match_score:', utils.show_shape(match_score))
         losses['match'] = 1. - (match_score * P.T).sum(dim=0).mean()
@@ -952,8 +958,9 @@ class Tree3Dv2(TreeStructure):
         pred_idx, seg_idx = utils.tensor_to(pred_idx, seg_idx, device=match_score.device)
         score_ci = match_score[pred_idx, seg_idx]
         # print(score_ci)
-        losses['mm'] = 1 - 2 * (score_ci * node_scores[pred_idx]).sum() / (
-            node_scores[pred_idx].sum() + match_score.shape[1])  # dice loss
+        losses['mm'] = 1 - 2 * (score_ci * node_scores[pred_idx]).sum() / \
+                       (node_scores[pred_idx].sum() + match_score.shape[1])  # dice loss
+
         return losses
 
     def run(self, epochs=10000, N_view=-1, K=0, gnn: nn.Module = None, A: Tensor = None, X: Tensor = None):
@@ -997,10 +1004,8 @@ class Tree3Dv2(TreeStructure):
                 # print('[Tree3D]', S.aminmax(), X.aminmax(), edge_weight.aminmax())
                 # loss_dict = self.loss_fn(S, node_score)
                 loss_dict = self.calc_losses(S, node_score, view_index)
+                total_loss = utils.sum_losses(loss_dict)
                 meter.update(loss_dict)
-                total_loss = sum(loss_dict.values())
-                # print('[Tree3D]', loss_dict)
-                # break
                 total_loss.backward()
                 opt.step()
                 lr_scheduler.step()
@@ -1127,6 +1132,7 @@ class Tree3Dv2(TreeStructure):
 
 
 class AutoEncoder(nn.Module):
+
     def __init__(self, num_faces: int, hidden_dims: Sequence[int] = (256, 256), use_bn=True):
         super().__init__()
         self.num_layers = len(hidden_dims)

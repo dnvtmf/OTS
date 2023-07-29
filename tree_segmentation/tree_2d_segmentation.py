@@ -11,6 +11,7 @@ from segment_anything.utils.amg import (
     build_point_grid,
     coco_encode_rle,
     rle_to_mask,
+    remove_small_regions,
 )
 
 
@@ -221,6 +222,7 @@ class TreeData(TreeStructure):
         device=None,
         verbose=0,
     ) -> None:
+        self._is_compressed = False
         self.data = self._fileter(mask_data)
         self.in_threshold = in_threshold
         self.in_thres_area = in_thres_area
@@ -232,6 +234,10 @@ class TreeData(TreeStructure):
             self.data['area'] = self.data['masks'].sum(dim=[-1, -2])
         super().__init__(num + 1, device, verbose)
         self.num_samples = torch.zeros(num + 1, dtype=torch.int, device=device)
+
+    @property
+    def is_compressed(self):
+        return self._is_compressed
 
     def _fileter(self, data: MaskData = None):
         if data is None:
@@ -246,6 +252,7 @@ class TreeData(TreeStructure):
         if mask_data is not None:  # and 'area' not in mask_data
             mask_data['area'] = mask_data['masks'].sum(dim=[-1, -2])
             self.data = mask_data
+        self.uncompress()
         num = 0 if self.data is None else len(self.data['masks'])
         self.parent = torch.full((num + 1,), -1, dtype=torch.int, device=self.device)  # 父节点
         self.first = torch.full((num + 1,), -1, dtype=torch.int, device=self.device)  # 第一个子节点
@@ -277,7 +284,7 @@ class TreeData(TreeStructure):
     def insert(self, i, now=0):
         area_i = self.data['area'][i - 1]
         if area_i < self.min_area:
-            if self.verbose > 0:
+            if self.verbose > 1:
                 print(f'[Tree2D] ingore {i} due to small area {area_i.item()} vs {self.min_area}')
             return
         # print('=' * 10, i, now, f"area={area_i}", '=' * 10)
@@ -297,10 +304,10 @@ class TreeData(TreeStructure):
                     if self.data['iou_preds'][i - 1] > self.data['iou_preds'][j - 1]:
                         self.node_replace(i, j)
                     else:
-                        if self.verbose > 0:
+                        if self.verbose > 1:
                             print(f'[Tree2D] {i} is same with {j}, skip')
                     return
-                if self.verbose > 0:
+                if self.verbose > 1:
                     print(f'[Tree2D] {i} in {j}, {inter.item() / area_i.item():.2%}')
                 if self.first[j] < 0:
                     self.node_insert(i, j)
@@ -318,17 +325,18 @@ class TreeData(TreeStructure):
             print(f"[Tree2D] {i} union with {nodes_union}")
             return
         # assert len(nodes_union) == 0, f"{i} union with {nodes_union}"
-        if self.verbose > 0:
+        if self.verbose > 1:
             print(f"[Tree2D] {i} in {now} before {self.first[now].item()}", nodes_in_i)
         self.node_insert(i, now)
         self.num_samples[i] = self.num_samples[i] * 0.5
         if len(nodes_in_i) > 0:
             for j in nodes_in_i:
                 self.node_move(j, i)
-                if self.verbose > 1:
+                if self.verbose > 2:
                     print(f"[Tree2D] move {j} from {now} to {i}")
 
     def update_tree(self):
+        self.uncompress()
         while self.cnt < len(self.data['masks']):
             self.insert(self.node_new())  # self.print_tree()
 
@@ -427,6 +435,7 @@ class TreeData(TreeStructure):
         return sample_indices
 
     def cat(self, mask_data: MaskData) -> None:
+        self.uncompress()
         mask_data = self._fileter(mask_data)
         if self.verbose > 0:
             print('[Tree2D] cat', (None if self.data is None else self.data['masks'].shape), mask_data['masks'].shape)
@@ -451,6 +460,7 @@ class TreeData(TreeStructure):
     #     return keep_by_nms
 
     def filter(self, keep) -> None:
+        self.uncompress()
         self.data.filter(keep)
         self.reset()
 
@@ -458,6 +468,7 @@ class TreeData(TreeStructure):
         """remove duplicate after merge new results"""
         if self.verbose > 0:
             print('[Tree2D] remove_not_in_tree')
+        self.uncompress()
         if self.cnt == 0:  # empty
             return
         # if self.cnt == self.data['masks'].shape[0]:
@@ -468,11 +479,11 @@ class TreeData(TreeStructure):
         self.node_rearrange()
         self.resize(self.cnt + 1)  # self.print_tree()
 
-    def dillate(self):
+    def _dillate(self):
         """腐蚀边界, 直至无空隙"""
-        pass
+        raise NotImplementedError
 
-    def output(self, output_mode='binary_mask'):
+    def _output(self, output_mode='binary_mask'):
         assert output_mode in ["binary_mask", "uncompressed_rle", "coco_rle"], f"Unknown output_mode {output_mode}."
         # Compress to RLE
         # data["masks"] = uncrop_masks(data["masks"], crop_box, orig_h, orig_w)
@@ -501,24 +512,12 @@ class TreeData(TreeStructure):
             }
             curr_anns.append(ann)
 
-        return curr_anns
+        # return curr_anns
+        raise NotImplementedError
 
     def save(self, filename, **kwargs):
-        if self.data is None:
-            data = {}
-        else:
-            self.remove_not_in_tree()
-            masks = []
-            for level, nodes in enumerate(self.get_levels()):
-                if level == 0:
-                    continue
-                mask = torch.zeros_like(self.data['masks'][0], dtype=torch.int)
-                for i in nodes:
-                    mask[self.data['masks'][i - 1]] = i
-                masks.append(mask)
-            masks = torch.stack(masks, dim=0)
-            print(masks.shape)
-            data = {k: masks if k == 'masks' else v for k, v in self.data.items()}
+        self.compress()
+        data = {} if self.data is None else {k: v for k, v in self.data.items()}
         data.update({
             'parent': self.parent,
             'first': self.first,
@@ -546,18 +545,8 @@ class TreeData(TreeStructure):
         self.cnt = data.pop('cnt')
         self.num_samples = data.pop('num_samples')
         extra = data.pop('extra')
-        if len(data) > 0:
-            self.data = MaskData(**data)
-        else:
-            self.data = None
-        if self.data is not None:
-            masks = self.data['masks']
-            self.data['masks'] = torch.zeros((self.cnt, *masks.shape[1:]), dtype=torch.bool, device=self.device)
-            for level, nodes in enumerate(self.get_levels()):
-                if level == 0:
-                    continue
-                for i in nodes:
-                    self.data['masks'][i - 1] = masks[level - 1] == i
+        self.data = MaskData(**data) if len(data) > 0 else None
+        self._is_compressed = True
         return extra
 
     def to(self, device):
@@ -566,3 +555,79 @@ class TreeData(TreeStructure):
             if isinstance(v, Tensor):
                 self.data[k] = v.to(device)
         return self
+
+    def post_process(self, min_area=100):
+        """
+        1. remove disconnected regions and holes in masks with area smaller than min_area
+        2. remove overlapped area for the masks in same level
+        """
+        if self.verbose > 0:
+            print(f"[Tree2D] post process min_area={min_area}")
+        self.uncompress()
+        unchanged = True
+        for level, nodes in enumerate(self.get_levels()):
+            if level == 0:
+                assert len(nodes) == 1 and nodes.item() == 0
+                continue
+            assert nodes.min() > 0
+            order = torch.argsort(self.data['iou_preds'][nodes - 1], descending=False)
+            masks = self.data['masks'][nodes - 1]
+            for i in range(len(nodes)):
+                mask = masks[order[i]].cpu().numpy()
+                mask, changed = remove_small_regions(mask, min_area, mode="holes")
+                unchanged = unchanged and not changed
+                mask, changed = remove_small_regions(mask, min_area, mode="islands")
+                unchanged = unchanged and not changed
+                self.data['masks'][nodes[order[i]] - 1].copy_(torch.from_numpy(mask).to(masks))
+        # re-build segmentation tree
+        if not unchanged:
+            self.cnt = 0
+            self.update_tree()
+        self.compress()
+        if self.verbose > 0:
+            print(f"[Tree2D] complete post process")
+        return self
+
+    def compress(self):
+        """save masks use multi-level tensor, all mask in same level do not intersection"""
+        if self.is_compressed:
+            return
+        self._is_compressed = True
+        if self.data is None:
+            return
+        if self.verbose > 0:
+            print(f"[Tree2D] Compress masks")
+        self.remove_not_in_tree()
+        masks = []
+        for level, nodes in enumerate(self.get_levels()):
+            if level == 0:
+                continue
+            mask = torch.zeros_like(self.data['masks'][0], dtype=torch.int)
+            for i in nodes:
+                mask[self.data['masks'][i - 1]] = i
+            masks.append(mask)
+        self.data['masks'] = torch.stack(masks, dim=0)
+
+    def uncompress(self):
+        if not self.is_compressed:
+            return
+        self._is_compressed = False
+        if self.data is None:
+            return
+        if self.verbose > 0:
+            print(f"[Tree2D] uncompress masks")
+        masks = self.data['masks']
+        self.data['masks'] = torch.zeros((self.cnt, *masks.shape[1:]), dtype=torch.bool, device=self.device)
+        for level, nodes in enumerate(self.get_levels()):
+            if level == 0:
+                continue
+            for i in nodes:
+                self.data['masks'][i - 1] = masks[level - 1] == i
+
+    def mask(self, index) -> Optional[Tensor]:
+        if self.data is None:
+            return None
+        elif not self.is_compressed:
+            return self.data['masks'][index]
+        else:
+            return self.data['masks']

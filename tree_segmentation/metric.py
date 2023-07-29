@@ -1,7 +1,9 @@
-from typing import Union
+import math
+from typing import Union, Tuple
 
 import numpy as np
 import torch
+from torch import Tensor
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
@@ -9,112 +11,135 @@ from tree_segmentation import TreeData, Tree3D, Tree3Dv2
 
 
 class TreeSegmentMetric:
-    """The Metric to comaper two tree segmentation results"""
+    """The Metric to compare two tree segmentation results"""
 
     def __init__(self, iou_threshold=0.5):
-        self.cnt = 0
-        self.sum = 0
         self.iou_threshold = iou_threshold
         self.eps = 1e-7
+        self.cnt = 0
+        self.PQ_sum = 0  # panoptic quality
+        self.SQ_sum = 0  # segmentation quality
+        self.RQ_sum = 0  # recognition quality
+        self.TQ_sum = 0  # tree quality
         self.gt_iou_sum = 0
 
     @torch.no_grad()
     def update(self, prediction: Union[Tree3D, TreeData, Tree3Dv2], gt: Union[Tree3D, TreeData, Tree3Dv2]):
         if type(gt).__name__.startswith('Tree3D'):
-            match, match_iou, matched, matched_iou = self.match_3d(prediction, gt)
+            IoU, indices_pd, indices_gt = self.calc_IoU_3d(prediction, gt)
         elif isinstance(gt, TreeData):
-            match, match_iou, matched, matched_iou = self.match_2d(prediction, gt)
+            IoU, indices_pd, indices_gt = self.calc_IoU_2d(prediction, gt)
         else:
             raise NotImplementedError(f"prediction: {prediction.__class__.__name__}, gt: {gt.__class__.__name__}")
-        num_gt = len(matched)
-        TP = (match > 0).sum()
-        FP = match.shape[0] - TP
-        FN = num_gt - TP
-        iou = match_iou.sum()
-        PQ = iou / (TP + FP * 0.5 + FN * 0.5)
-        self.sum += PQ
+        N, M = IoU.shape
+        # get TQ
+        matched_iou, matched = IoU.max(dim=1)
+        iou_ = torch.zeros_like(IoU)
+        iou_[torch.arange(N, device=iou_.device), matched] = matched_iou * (matched_iou >= self.iou_threshold)
+        iou_ = torch.cummax(iou_, dim=0)[0]
+        TP = (iou_ > 0).sum(dim=1)
+        FP = torch.arange(N, device=TP.device, dtype=TP.dtype) + 1 - TP
+        FN = M - TP
+        TQ = iou_.sum(dim=1) / (TP + FP * 0.5 + FN * 0.5)
+        self.TQ_sum += TQ.mean().item()
+
+        # get PQ
+        IoU = IoU * (IoU >= self.iou_threshold)
+        IoU = IoU.detach().cpu().numpy()
+        pred_idx, gt_idx = linear_sum_assignment(1 - IoU)
+        mask = IoU[pred_idx, gt_idx] >= self.iou_threshold
+        pred_idx, gt_idx = pred_idx[mask], gt_idx[mask]
+        TP = len(mask)
+        FP = N - TP
+        FN = M - TP
+        iou = IoU[pred_idx, gt_idx].sum()
+        self.SQ_sum += iou / TP
+        self.RQ_sum += TP / (TP + FP * 0.5 + FN * 0.5)
+        self.PQ_sum += iou / (TP + FP * 0.5 + FN * 0.5)
         self.cnt += 1
         self.gt_iou_sum += matched_iou.mean()
 
-    def match_3d(self, prediction: Union[Tree3D, Tree3Dv2], gt: Union[Tree3D, Tree3Dv2]):
-        # assert type(prediction) == type(gt)
-        prediction.node_rearrange()
-        N = prediction.cnt
-        if isinstance(prediction, Tree3D):
-            pred_masks = torch.zeros((N, prediction.num_faces), device=prediction.device, dtype=torch.bool)
-            temp = prediction.face_parent[1:].clone()
-            for i in range(N, 0, -1):
-                pred_masks[i - 1] = temp == i
-                temp[pred_masks[i - 1]] = prediction.parent[i].to(temp.dtype)
-        else:
-            pred_masks = prediction.masks[:N, 1:]
-        pred_masks = pred_masks.float()
-        pred_area = torch.mv(pred_masks, prediction.area)
-        # print('predictions:', pred_masks.shape, pred_masks.dtype, pred_area.shape)
-
-        gt.node_rearrange()
-        M = gt.cnt
-        if isinstance(gt, Tree3D):
-            gt_masks = torch.zeros((M, gt.num_faces), device=gt.device, dtype=torch.bool)
-            temp = gt.face_parent[1:].clone()
-            for i in range(M, 0, -1):
-                gt_masks[i - 1] = temp == i
-                temp[gt_masks[i - 1]] = gt.parent[i].to(temp.dtype)
-        else:
-            gt_masks = gt.masks[:M, 1:]
-        gt_masks = gt_masks.float()
-        gt_area = torch.mv(gt_masks, gt.area)
-        # print('ground_truth:', gt_masks.shape, gt_masks.dtype)
-        inter = F.linear(pred_masks, gt_masks * gt.area)
-        iou_matrix = inter / (pred_area[:, None] + gt_area[None, :] - inter).clamp_min(1e-7)
-        iou_matrix = iou_matrix * (iou_matrix >= self.iou_threshold)
-        iou_matrix = iou_matrix.detach().cpu().numpy()
-        # get GT match
-        pred_idx, gt_idx = linear_sum_assignment(1 - iou_matrix)
-        mask = iou_matrix[pred_idx, gt_idx] > 0
-        pred_idx, gt_idx = pred_idx[mask], gt_idx[mask]
-
-        match = np.full(N, -1, dtype=np.int32)
-        matched = np.full(M, -1, dtype=np.int32)
-        match_iou = np.zeros(N, dtype=np.float32)
-        matched_iou = np.zeros(M, dtype=np.float32)
+        # output match result
+        assert 0 <= pred_idx.min() and pred_idx.max() < len(indices_pd)
+        assert 0 <= gt_idx.min() and gt_idx.max() < len(indices_gt)
+        pred_idx = indices_pd.cpu().numpy()[pred_idx]
+        gt_idx = indices_gt.cpu().numpy()[gt_idx]
+        match = np.full(prediction.cnt + 1, -1, dtype=np.int32)
+        matched = np.full(gt.cnt + 1, -1, dtype=np.int32)
+        match_iou = np.zeros(prediction.cnt + 1, dtype=np.float32)
+        matched_iou = np.zeros(gt.cnt + 1, dtype=np.float32)
         match[pred_idx] = gt_idx
         matched[gt_idx] = pred_idx
-        match_iou[pred_idx] = matched_iou[gt_idx] = iou_matrix[pred_idx, gt_idx]
-        print(match, match_iou, matched, matched_iou, sep='\n')
-        return match, match_iou, matched, matched_iou
-
-    def match_2d(self, prediction: TreeData, gt: TreeData):
-        prediction.remove_not_in_tree()
-        gt.remove_not_in_tree()
-        N = prediction.cnt
-        M = gt.cnt
-        # print('N:', N, 'M:', M)
-        iou_matrix = torch.zeros((N, M), dtype=torch.float, device=gt.device)
-        for i in range(N, 0, -1):
-            mask_i = prediction.data['masks'][i - 1]
-            area_i = mask_i[1:].sum().item()
-            for j in range(M, 0, -1):
-                mask_j = gt.data['masks'][j - 1]
-                area_j = mask_j[1:].sum().item()
-                inter = (mask_i & mask_j).sum().item()
-                iou = inter / max(area_i + area_j - inter, self.eps)
-                iou_matrix[i - 1][j - 1] = iou
-        iou_matrix = iou_matrix * (iou_matrix >= self.iou_threshold)
-        iou_matrix = iou_matrix.detach().cpu().numpy()
-        pred_idx, gt_idx = linear_sum_assignment(1 - iou_matrix)
-        mask = iou_matrix[pred_idx, gt_idx] > 0
-        pred_idx, gt_idx = pred_idx[mask], gt_idx[mask]
-
-        match = np.full(N, -1, dtype=np.int32)
-        matched = np.full(M, -1, dtype=np.int32)
-        match_iou = np.zeros(N, dtype=np.float32)
-        matched_iou = np.zeros(M, dtype=np.float32)
-        match[pred_idx] = gt_idx
-        matched[gt_idx] = pred_idx
-        match_iou[pred_idx] = matched_iou[gt_idx] = iou_matrix[pred_idx, gt_idx]
+        match_iou[pred_idx] = matched_iou[gt_idx] = IoU[pred_idx, gt_idx]
         # print(match, match_iou, matched, matched_iou, sep='\n')
         return match, match_iou, matched, matched_iou
 
-    def summarize(self):
-        return self.sum / self.cnt
+    def calc_IoU_3d(self, prediction, gt):
+        # type: (Union[Tree3D, Tree3Dv2],  Union[Tree3D, Tree3Dv2])-> Tuple[Tensor, Tensor, Tensor]
+        # get prediction masks
+        indices_pd = torch.cat(prediction.get_levels(), dim=0)[1:] - 1  # do not care root
+        N = len(indices_pd)
+        if isinstance(prediction, Tree3D):
+            masks_pd = torch.zeros((N, prediction.num_faces), device=prediction.device, dtype=torch.bool)
+            temp = prediction.face_parent[1:].clone()
+            for i in range(N, 0, -1):
+                idx = indices_pd[i] + 1
+                masks_pd[i - 1] = temp == idx
+                temp[masks_pd[i - 1]] = prediction.parent[idx].to(temp.dtype)
+        else:
+            masks_pd = prediction.masks[indices_pd, 1:]
+        order = torch.argsort(prediction.scores[indices_pd], descending=True)
+        indices_pd = indices_pd[order]
+        masks_pd = masks_pd[order].float()
+
+        # get ground-truth masks
+        indices_gt = torch.cat(gt.get_levels(), dim=0)[1:] - 1  # do not care root
+        M = len(indices_gt)
+        if isinstance(gt, Tree3D):
+            masks_gt = torch.zeros((M, gt.num_faces), device=gt.device, dtype=torch.bool)
+            temp = gt.face_parent[1:].clone()
+            for i in range(M, 0, -1):
+                idx = indices_gt[i] + 1
+                masks_gt[i - 1] = temp == idx
+                temp[masks_gt[i - 1]] = gt.parent[idx].to(temp.dtype)
+        else:
+            masks_gt = gt.masks[indices_gt, 1:]
+        masks_gt = masks_gt.float()
+
+        # calc IoU matrix
+        area_pd = torch.mv(masks_pd, gt.area)
+        area_gt = torch.mv(masks_gt, gt.area)
+        inter = F.linear(masks_pd, masks_gt * gt.area)
+        IoU = inter / (area_pd[:, None] + area_gt[None, :] - inter).clamp_min(self.eps)
+        return IoU, indices_pd, indices_gt
+
+    def calc_IoU_2d(self, prediction: TreeData, gt: TreeData) -> Tuple[Tensor, Tensor, Tensor]:
+        indices_pd = torch.cat(prediction.get_levels(), dim=0)[1:] - 1  # do not care root
+        order = torch.argsort(prediction.data['iou_preds'][indices_pd], descending=True)  # sorted by score
+        indices_pd = indices_pd[order]
+        masks_pd = prediction.data['masks'][indices_pd].flatten(1, )
+
+        indices_gt = torch.cat(gt.get_levels(), dim=0)[1:] - 1  # do not care root
+        masks_gt = gt.data['masks'][indices_gt].flatten(1, )
+        # get IoU
+        area_pd = masks_pd.sum(dim=1)
+        area_gt = masks_gt.sum(dim=1)
+        interscection = F.linear(masks_pd.float(), masks_gt.float())
+        IoU = interscection / (area_pd[:, None] + area_gt[None, :] - interscection).clamp_min(self.eps)
+        return IoU, indices_pd, indices_gt
+
+    @property
+    def PQ(self):
+        return self.PQ_sum / self.cnt if self.cnt > 0 else math.nan
+
+    @property
+    def SQ(self):
+        return self.SQ_sum / self.cnt if self.cnt > 0 else math.nan
+
+    @property
+    def RQ(self):
+        return self.RQ_sum / self.cnt if self.cnt > 0 else math.nan
+
+    @property
+    def TQ(self):
+        return self.TQ_sum / self.cnt if self.cnt > 0 else math.nan

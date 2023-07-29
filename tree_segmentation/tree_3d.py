@@ -1,5 +1,4 @@
 import argparse
-import hashlib
 import math
 from pathlib import Path
 from typing import Dict, List, Union, Optional
@@ -122,7 +121,7 @@ class TreeSegment:
                 min_area=self.get_value('min_area')
             )
         if self._tree_2d.data is None and self.tri_id is not None:
-            background = self.tri_id == 0
+            background = self.tri_id.eq(0)
             foreground = torch.logical_not(background)
             mask_data = MaskData(
                 masks=torch.stack([foreground, background], dim=0),
@@ -225,7 +224,6 @@ class TreeSegment:
 
     def reset_2d(self):
         print('[GUI] reset 2D')
-        # self._tree2d = None
         self._tree_2d = None
         self.mask_data = None
         self._2d_mask = None
@@ -342,6 +340,10 @@ class TreeSegment:
             if not self.run_tree_seg_2d_stage2():
                 break
             print(f'[Tree 2D]: autorun stage1 {step + 1}/{max_steps}')
+
+    def run_tree_seg_2d_post(self):
+        if self._tree_2d is not None:
+            self.tree2d.post_process()
 
     def new_camera_pose(self, *, Tw2v=None):
         if Tw2v is None:

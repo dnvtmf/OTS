@@ -16,6 +16,8 @@ import torch
 from torch import Tensor
 
 import tree_segmentation
+import tree_segmentation.tree_2d_segmentation as ts2
+import tree_segmentation.tree_3d_segmentation as ts3
 from tree_segmentation.extension import utils
 from tree_segmentation.extension import ops_3d
 from tree_segmentation.extension.utils import ImageViewer, Viewer3D
@@ -215,7 +217,9 @@ class TreeSegmentGUI(TreeSegment):
                 in_threshold=dpg.get_value('in_threshold'),
                 in_thres_area=dpg.get_value('in_area_threshold'),
                 union_threshold=dpg.get_value('union_threshold'),
-                min_area=dpg.get_value('min_area')
+                min_area=dpg.get_value('min_area'),
+                device=self.device,
+                verbose=1,
             )  # type: TreeData
         if self._tree_2d.data is None and self.tri_id is not None:
             background = self.tri_id == 0
@@ -497,13 +501,15 @@ class TreeSegmentGUI(TreeSegment):
         self.view_3d.need_update = True
 
     def reload(self):
-        global tree_segmentation
+        global tree_segmentation, ts2, ts3
         self.reset_2d()
         self.reset_3d()
         self._predictor = None
         self._tree_2d = None
         self._tree_3d = None
         tree_segmentation = importlib.reload(tree_segmentation)
+        ts2 = importlib.reload(ts2)
+        ts3 = importlib.reload(ts3)
         gc.collect()
         print('Reload successful!')
 
@@ -1049,7 +1055,7 @@ class TreeSegmentGUI(TreeSegment):
             # dpg.add_button(width=W, height=H, label='New Pose', callback=self.new_camera_pose)
             dpg.add_button(width=W, height=H, label='Stage1', callback=self.run_tree_seg_2d_stage1)
             dpg.add_button(width=W, height=H, label='Stage2', callback=self.run_tree_seg_2d_stage2)
-            dpg.add_button(width=W, height=H, label='Post', callback=None)
+            dpg.add_button(width=W, height=H, label='Post', callback=self.run_tree_seg_2d_post)
             dpg.add_button(width=W, height=H, label='AutoRun', callback=self.autorun_tree_seg_2d)
 
     def make_2d_tree_segmentatin_options(self):
@@ -1333,17 +1339,10 @@ class TreeSegmentGUI(TreeSegment):
         dpg.pop_container_stack()
 
     def save_result(self):
-        prefix = 'gui'
-        if self.mode == 'E3D':
-            saved_names = sorted([path.stem for path in self.cache_dir.glob("*.tree3dv2")])
-        elif self.mode == 'S3D':
-            saved_names = sorted([path.stem for path in self.cache_dir.glob("*.tree3d")])
-        elif self.mode == 'E2D':
-            prefix = os.path.splitext(self.image_paths[self.image_index])[0]
-            saved_names = sorted([path.stem for path in self.image_dir.glob(f"{prefix}*.tree2d")])
-
-        else:
-            raise RuntimeError
+        prefix = '' if self.mode != 'E2D' else os.path.splitext(self.image_paths[self.image_index])[0]
+        suffix = {'E2D': '.tree2d', 'E3D': '.tree3dv2', 'S3D': '.tree3d'}[self.mode]
+        save_dir = self.image_dir if self.mode == 'E2D' else self.cache_dir
+        saved_names = sorted([path.stem for path in save_dir.glob(f"{prefix}*{suffix}")])
         if not dpg.does_alias_exist('save_popup'):
             dpg.add_window(label="Save Results", modal=True, show=False, tag="save_popup", popup=True, autosize=True)
         dpg.delete_item('save_popup', children_only=True)
@@ -1351,26 +1350,21 @@ class TreeSegmentGUI(TreeSegment):
 
         def _save():
             filename = dpg.get_value('save_file_name')
+            if self.mode == 'E2D' and not filename.startswith(prefix):
+                filename = prefix + filename
+            elif len(filename) == 0:
+                filename = 'gui'
+            save_path = save_dir.joinpath(f"{filename}.{suffix}")
             if self.mode == 'E2D' and self._tree_2d is not None:
-                if not filename.startswith(prefix):
-                    filename = prefix + filename
-                save_path = self.image_dir.joinpath(f"{filename}.tree2d")
                 self._tree_2d.save(save_path)
-                print(f'[GUI]: save tree segment results to {save_path}')
-            elif self.mode == 'E3D':
-                save_path = self.cache_dir.joinpath(f'{filename}.tree3dv2')
-                self.tree3d.save(save_path)
-                print(f'[GUI]: save tree segment results to {save_path}')
             else:
-                save_path = self.cache_dir.joinpath(f'{filename}.tree3d')
                 self.tree3d.save(save_path)
-                print(f'[GUI]: save tree segment results to {save_path}')
+            print(f'[GUI]: save tree segment results to {save_path}')
             dpg.hide_item('save_popup')
 
         for name in saved_names:
             with dpg.group(horizontal=True, parent='save_popup'):
-                dpg.add_text(name)
-                # dpg.add_button(label='D', callback=lambda: dpg.hide_item("load_popup"))
+                dpg.add_button(label=name, callback=lambda *, _name=name: dpg.set_value('save_file_name', _name))
         dpg.add_separator(parent='save_popup')
         default_name = prefix
         cnt = 1
