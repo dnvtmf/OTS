@@ -10,8 +10,6 @@ reference:
 - http://motion.pratt.duke.edu/RoboticSystems/3DRotations.html
 """
 import torch
-import pytorch3d.transforms
-from lietorch import SO3
 from torch import Tensor
 from . import quaternion
 
@@ -182,6 +180,9 @@ def R_to_axis_angle(R: Tensor):
 
 
 def R_to_lie(R: Tensor):
+
+    import pytorch3d.transforms
+    from lietorch import SO3
     quat = pytorch3d.transforms.matrix_to_quaternion(R[..., :3, :3])
     quat = torch.cat((quat[..., 1:], quat[..., 0:1]), -1)  # swap real first to real last
     Ps = SO3.InitFromVec(quat)
@@ -189,6 +190,7 @@ def R_to_lie(R: Tensor):
 
 
 def R_to_lie_np(matrix: Tensor):
+    from lietorch import SO3
     from scipy.spatial.transform import Rotation
     quat = Rotation.from_matrix(matrix.detach().cpu().numpy()).as_quat()
     T = SO3.InitFromVec(torch.from_numpy(quat).to(matrix))

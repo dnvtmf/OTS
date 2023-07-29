@@ -66,6 +66,7 @@ class PointLight(Light):
         self.register_buffer('location', location)
         self.location: Tensor
 
-    def forward(self, points: Tensor):
+    def forward(self, points: Tensor = None):
+        assert points is not None
         direction = normalize(self.location - points)
         return direction, self.ambient_color, self.diffuse_color, self.specular_color

@@ -403,6 +403,20 @@ class TreeData(TreeStructure):
         sample_points = sample_points / sample_points.new_tensor([W, H])
         return sample_points.cpu().numpy()
 
+    @torch.no_grad()
+    def sample_each_mask(self, num_point_per_mask=1) -> np.ndarray:
+        self.remove_not_in_tree()
+        points = []
+        _, H, W = self.data['masks'].shape
+        for i in range(self.cnt):
+            mask = self.data['masks'][i]
+            xy = torch.nonzero(mask).flip(-1)
+            indices = torch.randint(0, len(xy), (num_point_per_mask,), device=xy.device)
+            xy = xy[indices]
+            xy += torch.randn_like(xy) * 1.0
+            points.append(xy)
+        return torch.cat(points, dim=0).cpu().numpy() / np.array([W, H])
+
     def get_sample_indices(self, sample_limit_fn, root=0):
         sample_indices = []
         for child in self.get_children(root):

@@ -6,7 +6,7 @@ import torch.hub
 import torch.utils.model_zoo as model_zoo
 
 # from extension import logger, Registry
-from tree_segmentation.extension.utils import convert_pth
+from .utils import convert_pth
 
 
 class BackboneBase(torch.nn.Module):

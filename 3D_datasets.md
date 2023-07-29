@@ -12,7 +12,7 @@
 | NYUv1                     |
 | [NYUv2](#NYUv2)           | Indoor (ID)   | 1449   |                | 894 |    | ✓  |    |     |
 | SUN RGB-D                 |               | 10K    |
-| [SceneNN](#SceneNN)       | indoor(MID)   | 100    |                | 22  |    | ✓  |    | ✓   |
+| [SceneNN](#SceneNN)       | indoor (MID)  | 100    |                | 22  |    | ✓  |    | ✓   |
 | RueMonge2014              |
 | Semantic3D                |
 | PL3D                      |
@@ -29,7 +29,8 @@
 | RGBD-v2                   |               | 17     |
 | SUN 3D                    |               | 254    |
 | Paris-CARLA-3D            | Outdoor(P)    |        |                |     | ✓  | ✓  |    |     |
-| [Replica](#Replica)       | Indoor (M)    | 18     |                |     | ✓  | ✓  |    | ✓   |
+| [Replica](#Replica)       | Indoor (M)    | 18     |                | 88  | ✓  | ✓  |    | ✓   |
+| HM3D(#HM3D)               | Indoor        | 1000   |                |     |    |    |    |     |
 
 *格式: M: Mesh, D: Depth, I: Images, P: Point Clouds
 
@@ -129,6 +130,14 @@ The Replica Dataset is a dataset of high quality reconstructions of a variety of
 
 - [Project](https://github.com/facebookresearch/Replica-Dataset)
 - paper: [The Replica Dataset: A Digital Replica of Indoor Spaces](https://arxiv.org/abs/1906.05797)
+
+## 12. <span id="HM3D"> HM3D </span>
+
+The Habitat-Matterport 3D Research Dataset (HM3D) is the largest-ever dataset of 3D indoor spaces. It consists of 1,000 high-resolution 3D scans (or digital twins) of building-scale residential, commercial, and civic spaces generated from real-world environments.
+
+- name: Habitat-Matterport 3D Research Dataset (HM3D)
+- [Project](https://aihabitat.org/datasets/hm3d/)
+- paper: [Habitat-Matterport 3D Dataset ({HM}3D): 1000 Large-scale 3D Environments for Embodied {AI}](https://arxiv.org/abs/2109.08238)
 
 ## Paris-CARLA-3D
 

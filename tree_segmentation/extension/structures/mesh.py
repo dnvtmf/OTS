@@ -1,9 +1,12 @@
+import numpy as np
 import torch
 from torch import Tensor
+import open3d as o3d
 
 from tree_segmentation.extension.ops_3d.misc import dot, normalize
 from tree_segmentation.extension.utils.io.mesh import load_mesh
 from tree_segmentation.extension.structures.material_texture import Material, merge_materials
+from tree_segmentation.extension.utils import to_open3d_type
 
 
 class Mesh:
@@ -42,8 +45,8 @@ class Mesh:
     @classmethod
     def load(cls, filename, mtl=True) -> 'Mesh':
         data = load_mesh(filename, mtl=mtl, loader='my')
-        from tree_segmentation.extension.utils import show_shape
-        print(show_shape(data))
+        # from tree_segmentation.extension.utils import show_shape
+        # print(show_shape(data))
         kwargs = {'v_pos': data['v_pos'], 'f_pos': data['f_pos']}
         if mtl and 'materials' in data and len(data['materials']) > 0:
             if len(data['materials']) > 1:
@@ -66,6 +69,35 @@ class Mesh:
                 v_clr = v_clr.float() / 255.
             kwargs['v_clr'] = v_clr
         return cls(**kwargs)
+
+    @classmethod
+    def from_open3d(cls, mesh: o3d.geometry.TriangleMesh) -> 'Mesh':
+        data = {
+            'v_pos': torch.from_numpy(np.asarray(mesh.vertices)).float(),
+            'f_pos': torch.from_numpy(np.asarray(mesh.triangles)).int(),
+        }
+        if mesh.has_vertex_colors():
+            data['v_clr'] = torch.from_numpy(np.asarray(mesh.vertex_colors)).float()
+        if mesh.has_vertex_normals():
+            data['v_nrm'] = torch.from_numpy(np.asarray(mesh.vertex_normals)).float()
+        if mesh.has_textures():
+            assert NotImplementedError
+        if mesh.has_triangle_uvs():
+            assert NotImplementedError
+        if mesh.has_triangle_normals():
+            assert NotImplementedError
+        return cls(**data)
+
+    def to_open3d(self) -> o3d.geometry.TriangleMesh:
+        mesh = o3d.geometry.TriangleMesh(
+            vertices=to_open3d_type(self.v_pos),
+            triangles=to_open3d_type(self.f_pos)
+        )
+        if self.v_clr is not None:
+            mesh.vertex_colors = to_open3d_type(self.v_clr)
+        if self.v_nrm is not None:
+            mesh.vertex_normals = to_open3d_type(self.v_nrm)
+        return mesh
 
     def save(cls, filename):
         raise NotImplementedError()
@@ -234,9 +266,13 @@ class Mesh:
 
     def __repr__(self) -> str:
         s = [
-            f"vertices={len(self.v_pos)}", f"faces={len(self.f_pos)}", None if self.v_tex is None else 'tex',
-            None if self.v_nrm is None else 'nrm', None if self.v_tng is None else 'tng',
-            None if self.material is None else f"mat={list(self.material.keys())}"
+            f"vertices={len(self.v_pos)}",
+            f"faces={len(self.f_pos)}",
+            None if self.v_clr is None else 'clr',
+            None if self.v_tex is None else 'tex',
+            None if self.v_nrm is None else 'nrm',
+            None if self.v_tng is None else 'tng',
+            None if self.material is None else f"mat={list(self.material.keys())}",
         ]
         return f"{self.__class__.__name__}({', '.join(si for si in s if si is not None)})"
 

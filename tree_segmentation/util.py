@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 from typing import Union
 
@@ -15,7 +16,7 @@ from tree_segmentation.extension import utils
 def color_mask(mask: np.ndarray, max_value=None):
     if max_value is None:
         max_value = mask.max()
-    mask = mask.astype(np.int)
+    mask = mask.astype(np.int32)
     cmap = matplotlib.colormaps['viridis'].resampled(max_value + 2)
     random_order = np.arange(max_value + 2)
     random_order[1:] = np.random.permutation(random_order[1:])
@@ -136,5 +137,5 @@ def show_all_levels(image, tree: Union[Tree3D, Tree3Dv2, TreeData], tri_id=None,
     return num_level + 1
 
 
-def save_tree_3d_results(results: Tensor, mesh, filename: Path):
-    pass
+def get_hash_name(filepath) -> str:
+    return hashlib.md5(str(filepath).encode()).hexdigest()

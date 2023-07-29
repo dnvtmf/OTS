@@ -4,3 +4,4 @@ from . import (
     structures,
 )
 from .structures import *
+from .meter import DictMeter

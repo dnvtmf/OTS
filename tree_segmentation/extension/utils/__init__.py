@@ -13,6 +13,7 @@ from . import (
     GAN_utils,
     progress_bar,
     timm_utils,
+    open3d_utils,
 )
 
 """辅助文件 不引用本项目中其他模块"""
@@ -32,3 +33,4 @@ from .GAN_utils import *
 from .progress_bar import ProgressBar
 from .memory import retry_if_cuda_oom
 from .gui import *
+from .open3d_utils import to_open3d_type

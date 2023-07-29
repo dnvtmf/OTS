@@ -62,7 +62,8 @@ def gen_encoder_output_proposals(memory: Tensor, memory_padding_mask: Tensor, sp
 
         grid_y, grid_x = torch.meshgrid(
             torch.linspace(0, H_ - 1, H_, dtype=torch.float32, device=memory.device),
-            torch.linspace(0, W_ - 1, W_, dtype=torch.float32, device=memory.device)
+            torch.linspace(0, W_ - 1, W_, dtype=torch.float32, device=memory.device),
+            indexing='ij'
         )
         grid = torch.cat([grid_x.unsqueeze(-1), grid_y.unsqueeze(-1)], -1)
 
@@ -551,7 +552,8 @@ class MSDeformAttnTransformerEncoder(nn.Module):
         for lvl, (H_, W_) in enumerate(spatial_shapes):
             ref_y, ref_x = torch.meshgrid(
                 torch.linspace(0.5, H_ - 0.5, H_, dtype=torch.float32, device=device),
-                torch.linspace(0.5, W_ - 0.5, W_, dtype=torch.float32, device=device)
+                torch.linspace(0.5, W_ - 0.5, W_, dtype=torch.float32, device=device),
+                indexing='ij'
             )
             ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H_)
             ref_x = ref_x.reshape(-1)[None] / (valid_ratios[:, None, lvl, 0] * W_)

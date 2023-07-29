@@ -1,15 +1,15 @@
-name: wan
+name: tree_seg
 channels:
     # You can use the TUNA mirror to speed up the installation if you are in mainland China.
     # - https://mirrors.tuna.tsinghua.edu.cn/anaconda/cloud/pytorch
     - pytorch
     - defaults
     - conda-forge
-    # - nvidia
-    - pyg
-    - pytorch3d
+    - nvidia
+    #    - pyg
+    #    - pytorch3d
 dependencies:
-    - python>=3.6
+    - python==3.8
     # common used
     - pip
     - matplotlib
@@ -17,16 +17,15 @@ dependencies:
     - pyyaml
     - tqdm
     - imageio
-    - pytorch >= 2.0.0
-    - torchvision
-    - pytorch-cuda
-    #    - pytorch3d
-    - pyg # torch_geometric
+    #    - pytorch >= 2.0.0
+    #    - torchvision
+    #    - torchaudio
+    #    - pytorch-cuda
     -   pip:
             # torch
-            #   - torch >= 2.0.0
-            #   - torchvision
-            #   - torchaudio
+            - torch >= 2.0.0
+            - torchvision
+            - torchaudio
             # common
             - json_tricks
             - pycocotools
@@ -43,6 +42,7 @@ dependencies:
             - open3d >= 0.15.2
             - trimesh[all]
             - transforms3d
-            #            - plyfile
             - kornia
             - imageio-ffmpeg
+            - torch_geometric
+            - fvcore

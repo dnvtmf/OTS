@@ -17,6 +17,7 @@ import tree_segmentation as tree_segmentation
 from segment_anything.build_sam import Sam, build_sam
 from tree_segmentation import MaskData, TreeData, TreePredictor, Tree3D
 from tree_segmentation.render import render_mesh
+from tree_segmentation.util import get_hash_name
 
 
 class TreeSegment:
@@ -188,7 +189,7 @@ class TreeSegment:
                 print(f"[GUI] There are no *.obj files in dir {self.mesh}")
                 return False
         self.mesh_path = obj_path
-        self.cache_dir = self.cache_root.joinpath(hashlib.md5(str(self.mesh_path).encode()).hexdigest())
+        self.cache_dir = self.cache_root.joinpath(get_hash_name(self.mesh_path))
         self.cache_dir.mkdir(exist_ok=True)
 
         self._tree_3d = None

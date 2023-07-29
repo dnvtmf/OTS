@@ -5,6 +5,8 @@ from torch import Tensor
 from tree_segmentation.extension import Mesh, utils
 from tree_segmentation.extension import ops_3d
 
+dr.set_log_level(2)
+
 
 @torch.no_grad()
 def render_mesh(
@@ -17,7 +19,13 @@ def render_mesh(
     light_location=(0, 2., 0.)
 ):
     device = mesh.v_pos.device
-    camera_pos = Tw2v.inverse()[:3, 3]
+    camera_pos = Tw2v.inverse()[..., :3, 3]
+    if camera_pos.ndim == 1:
+        camera_pos = camera_pos[None, None, None]
+    elif camera_pos.ndim == 2:
+        camera_pos = camera_pos[:, None, None, :]
+    else:
+        raise ValueError
     view_direction = ops_3d.normalize(camera_pos)
     lights = ops_3d.PointLight(
         ambient_color=utils.n_tuple(0.5, 3),
@@ -45,12 +53,12 @@ def render_mesh(
             ks = dr.texture(mesh.material['ks'].data, uv) if 'ks' in mesh.material else 0
             nrm = ops_3d.compute_shading_normal(mesh, camera_pos, rast, None)
         else:
-            nrm = ops_3d.compute_shading_normal_face(mesh, camera_pos[None, None, None], rast, None)
+            nrm = ops_3d.compute_shading_normal_face(mesh, camera_pos, rast, None)
             ka, kd, ks = nrm.new_full((3,), 0.2), nrm.new_full((3,), 0.5), nrm.new_full((3,), 0.1)
         points, _ = dr.interpolate(mesh.v_pos[None].float(), rast, mesh.f_pos.int())
-        images = ops_3d.Blinn_Phong(nrm, lights(points), view_direction, (ka, kd, ks)).clamp(0, 1)
-    images = dr.antialias(images, rast, v_pos, mesh.f_pos.int())
-    # images = torch.where(rast[..., -1:] > 0, images, torch.ones_like(images))
+        images = ops_3d.Blinn_Phong(nrm, lights(points), view_direction, (ka, kd, ks))
+    images = dr.antialias(images, rast, v_pos, mesh.f_pos.int()).clamp(0, 1)
+    images = torch.where(rast[..., -1:] > 0, images, torch.ones_like(images))
     if Tw2c.ndim == 2:
         return images[0, :, :, :3], rast[0, :, :, -1].int()
     else:

@@ -2,31 +2,27 @@ import json
 import math
 import os
 from pathlib import Path
+from typing import Optional
 
 import nvdiffrast.torch as dr
 import torch
+from torch import Tensor
 import numpy as np
 from tqdm import tqdm
 from rich.console import Console
 from rich.tree import Tree
+import torch_geometric as pyg
 
+from semantic_sam import semantic_sam_l
 from tree_segmentation.extension import Mesh
 from tree_segmentation.extension import ops_3d
-from semantic_sam import semantic_sam_l
-from tree_segmentation import Tree3Dv2, Tree3D, TreePredictor
+from tree_segmentation import Tree3Dv2, Tree3D, TreePredictor, render_mesh
 from tree_segmentation.metric import TreeSegmentMetric
 
-torch.set_grad_enabled(False)
-console = Console()
 device = torch.device("cuda")
 glctx = dr.RasterizeCudaContext()
-# cache_root = Path('~/wan_code/segmentation/tree_segmentation/results').expanduser()
-cache_root = Path('/data5/wan/TreeSeg_cache').expanduser()
-data_root = Path('~/data/PartNet/data_v0').expanduser()
 ckpt_path = Path("~/models/segmentation/Semantic-SAM/swinl_only_sam_many2many.pth").expanduser()
-model = semantic_sam_l(ckpt_path).eval().to(device)
-print(model)
-predictor = TreePredictor(model)
+predictor: Optional[TreePredictor] = None
 
 
 def get_ground_truth(data, gt_tree: Tree3D, tree: Tree, part_names, part_map, node=0):
@@ -60,61 +56,16 @@ def get_ground_truth(data, gt_tree: Tree3D, tree: Tree, part_names, part_map, no
     return added_leaf
 
 
-@torch.no_grad()
-def render_mesh(mesh, image_size=256, num=1, num_split=10):
-    fovy = math.radians(60)
-    Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=device)
-    radius = torch.rand((num,), device=device) * 0.1 + 2.5
-    thetas = torch.arccos(torch.rand((num,), device=device) * 2. - 1.)
-    phis = torch.rand((num,), device=device) * 2.0 * torch.pi
-    # thetas = torch.tensor([90.], device=device).deg2rad_()
-    # phis = torch.ones((num,), device=device) * 0.5 * torch.pi
-    eye = ops_3d.coord_spherical_to(radius, thetas, phis).to(device)
-    Tw2v = ops_3d.look_at(eye, torch.zeros_like(eye))
-    Tv2w = ops_3d.look_at(eye, torch.zeros_like(eye), inv=True)
-    Tw2c = Tv2c @ Tw2v
-
-    images = []
-    tri_ids = []
-    for s in range(0, num, num_split):
-        e = min(s + num_split, num)
-        v_pos = ops_3d.xfm(mesh.v_pos, Tw2c[s:e])
-        # assert v_pos.ndim == 3
-        rast, _ = dr.rasterize(glctx, v_pos, mesh.f_pos.int(), (image_size, image_size))
-        view_pos = Tv2w[s:e, None, None, :3, 3]
-        # nrm = ops_3d.compute_shading_normal(mesh,view_pos, rast, None)
-        nrm = ops_3d.compute_shading_normal_face(mesh, view_pos, rast)
-        view_dir = ops_3d.normalize(view_pos)
-        light = ops_3d.normalize(view_dir + torch.randn(3, device=device) * 0.01)
-        img = ops_3d.Blinn_Phong(
-            nrm, light, view_dir, (nrm.new_full((3,), 0.2), nrm.new_full((3,), 0.5), nrm.new_full((3,), 0.1))
-        ).clamp(0, 1)
-        img = dr.antialias(img, rast, v_pos, mesh.f_pos.int())
-        images.append(img)
-        # tri_ids.append(part_map[rast[..., -1].long()])
-        tri_ids.append(rast[..., -1].long())
-    images, tri_ids = torch.cat(images, dim=0), torch.cat(tri_ids, dim=0)
-    mask = tri_ids[..., None] > 0
-    images = torch.where(mask, images, torch.ones_like(images))  # white backbground
-    images = torch.cat([images, mask.to(images)], dim=-1)
-    return images, tri_ids, Tw2v
-
-
-@torch.no_grad()
-def eval_one(example, metric: TreeSegmentMetric, num_views=100):
-    print(f"Example dir", example)
-    cache_dir = cache_root.joinpath(f"PartNet_{example.name}")
-    cache_dir.mkdir(exist_ok=True)
-    print('Cache Dir:', cache_dir)
+def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path, ):
     # load meta
-    with example.joinpath('meta.json').open('r') as f:
+    with obj_dir.joinpath('meta.json').open('r') as f:
         meta = json.load(f)
     print('meta:', meta)
-    with example.joinpath('result_after_merging.json').open('r') as f:
+    with obj_dir.joinpath('result_after_merging.json').open('r') as f:
         meta_parts = json.load(f)
     # print(list(os.scandir(example)))
     # Load Mesh
-    part_paths = sorted(list(example.joinpath('objs').glob('*.obj')))
+    part_paths = sorted(list(obj_dir.joinpath('objs').glob('*.obj')))
     part_names = [part_path.stem for part_path in part_paths]
     print(part_names)
     part_meshes = [Mesh.load(part_path, mtl=False) for part_path in sorted(part_paths)]
@@ -124,6 +75,7 @@ def eval_one(example, metric: TreeSegmentMetric, num_views=100):
         assert 0 <= part.f_pos.min() and part.f_pos.max() < len(part.v_pos)
     mesh = Mesh.merge(*part_meshes)
     mesh = mesh.to(device).unit_size()
+    torch.save(mesh, cache_dir.joinpath(obj_dir.name).with_suffix('.mesh_cache'))
 
     part_map = torch.zeros(mesh.f_pos.shape[0] + 1, device=device, dtype=torch.int)
     num = 1
@@ -132,7 +84,6 @@ def eval_one(example, metric: TreeSegmentMetric, num_views=100):
         num += part.f_pos.shape[0]
     # print(mesh)
     # print(part_map.shape, part_map.unique())
-    del part_meshes
 
     # build gt Tree
     gt = Tree3D(mesh, device=device)
@@ -142,16 +93,46 @@ def eval_one(example, metric: TreeSegmentMetric, num_views=100):
     assert len(meta_parts) == 1
     get_ground_truth(meta_parts[0], gt, show_tree, part_names, part_map)
     gt.save(cache_dir.joinpath('gt.tree3d'))
+    gt_v2 = Tree3Dv2.convert(gt)
+    gt_v2.save(cache_dir.joinpath('gt.tree3dv2'))
     print('Save gt result')
-    console.print(show_tree)
-    gt.print_tree()
-    del part_map
-    # print(utils.get_GPU_memory())
-    # torch.manual_seed(42)
-    images, tri_ids, Tw2vs = render_mesh(mesh, image_size=1024, num=num_views)
-    images, tri_ids, Tw2vs = images.cpu(), tri_ids.cpu(), Tw2vs.cpu()
-    # print(utils.get_GPU_memory())
-    # 2D Tree segmentation
+    # console.print(show_tree)
+    # gt.print_tree()
+    return mesh, gt_v2
+
+
+def get_images(mesh: Mesh, image_size=256, num_views=1, num_split=10, seed=42, fovy=60):
+    if seed > 0:
+        torch.manual_seed(seed)
+    fovy = math.radians(fovy)
+    # Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=device)
+    radius = torch.rand((num_views,), device=device) * 0.1 + 2.5
+    thetas = torch.arccos(torch.rand((num_views,), device=device) * 2. - 1.)
+    phis = torch.rand((num_views,), device=device) * 2.0 * torch.pi
+    # thetas = torch.tensor([90.], device=device).deg2rad_()
+    # phis = torch.ones((num,), device=device) * 0.5 * torch.pi
+    eye = ops_3d.coord_spherical_to(radius, thetas, phis).to(device)
+    Tw2vs = ops_3d.look_at(eye, torch.zeros_like(eye))
+    # Tv2w = ops_3d.look_at(eye, torch.zeros_like(eye), inv=True)
+    # Tw2c = Tv2c @ Tw2vs
+
+    images = []
+    tri_ids = []
+    for s in range(0, num_views, num_split):
+        e = min(s + num_split, num_views)
+        images_i, tri_ids_i = render_mesh(glctx, mesh, Tw2v=Tw2vs[s:e], fovy=fovy, image_size=image_size)
+        images.append(images_i)
+        # tri_ids.append(part_map[rast[..., -1].long()])
+        tri_ids.append(tri_ids_i)
+    images, tri_ids = torch.cat(images, dim=0), torch.cat(tri_ids, dim=0)
+    return images, tri_ids, Tw2vs
+
+
+def run_2d_segmentation(cache_dir: Path, images: Tensor, tri_ids: Tensor, Tw2vs: Tensor):
+    global predictor
+    if predictor is None:
+        predictor = TreePredictor(semantic_sam_l(ckpt_path).eval().to(device))
+    num_views = images.shape[0]
     for index in tqdm(range(num_views)):
         if cache_dir.joinpath(f"view_{index:04d}.data").exists():
             continue
@@ -173,22 +154,70 @@ def eval_one(example, metric: TreeSegmentMetric, num_views=100):
             'Tw2v': Tw2vs[index].clone(),
         }
         torch.save(data, cache_dir.joinpath(f"view_{index:04d}.data"))
-        del tree_data, data
-        # print(utils.get_GPU_memory())
+    return
+
+
+@torch.no_grad()
+def eval_one(
+    example,
+    cache_root,
+    metric: TreeSegmentMetric,
+    num_views=100,
+    force_2d=False,
+    force_3d=False,
+    force_gt=False
+):
+    print(f"Example dir", example)
+    cache_dir = cache_root.joinpath(f"PartNet_{example.name}")
+    cache_dir.mkdir(exist_ok=True)
+    print('Cache Dir:', cache_dir)
+
+    if 0 and cache_dir.joinpath('gt.tree3dv2').exists():
+        mesh = torch.load(cache_dir.joinpath(example.stem + '.mesh_cache'), map_location=device)
+        gt = Tree3Dv2(mesh, device=device)
+        gt.load(cache_dir.joinpath('gt.tree3dv2'))
+    else:
+        mesh, gt = get_mesh_and_gt_tree(example, cache_dir)
+
+    if force_2d or len(list(cache_dir.glob(f"view_*.data"))) < num_views:
+        images, tri_ids, Tw2vs = get_images(mesh, image_size=1024, num_views=num_views, seed=42)
+        run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
+    # print(utils.get_GPU_memory())
     # 3D Tree segmentation
-    tree3d = Tree3Dv2(mesh, cache_dir, device=device)
-    tree3d.area.to(device)
-    if cache_dir.joinpath('my.tree3dv2').exists():
+    tree3d = Tree3Dv2(mesh, device=device)
+    if not force_3d and cache_dir.joinpath('my.tree3dv2').exists():
         tree3d.load(cache_dir.joinpath('my.tree3dv2'))
     else:
-        with torch.enable_grad():
-            tree3d.run(20000)
+        tree3d.load_2d_results(cache_dir)
+        Gv = tree3d.build_view_graph()
+        Gm = tree3d.build_graph(Gv)
+        X, autoencoder = tree3d.compress_masks(epochs=3000)
+        K = tree3d.Lmax * 2
+        gnn = pyg.nn.GCN(
+            in_channels=X.shape[1],
+            hidden_channels=128,
+            num_layers=2,
+            out_channels=K,
+            norm='BatchNorm'
+        ).cuda()
+        # print(gnn)
+        tree3d.run(epochs=5000, K=K, gnn=gnn, A=Gm * Gm.ge(0.5), X=X)
         tree3d.save(cache_dir.joinpath('my.tree3dv2'))
     metric.update(tree3d, gt)
     return
 
 
+console = None
+
+
 def main():
+    global console
+    torch.set_grad_enabled(False)
+    console = Console()
+    # cache_root = Path('~/wan_code/segmentation/tree_segmentation/results').expanduser()
+    cache_root = Path('/data5/wan/TreeSeg_cache').expanduser()
+    data_root = Path('~/data/PartNet/data_v0').expanduser()
+
     print(f"Data Root: {data_root}")
     shapes = list(os.scandir(data_root))
     print(f'There are {len(shapes)} shapes')
@@ -197,7 +226,7 @@ def main():
 
     index = torch.randint(0, len(shapes), (10,))
     for i in index:
-        eval_one(data_root.joinpath(shapes[i.item()].name), metric)
+        eval_one(data_root.joinpath(shapes[i.item()].name), cache_root, metric, force_3d=False)
         print('PQ: ', metric.summarize())
 
 

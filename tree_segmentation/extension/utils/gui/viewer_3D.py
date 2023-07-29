@@ -10,8 +10,7 @@ from torch import Tensor
 
 from .image_viewer import ImageViewer
 from ..lazy_import import LazyImport
-
-ops_3d = LazyImport('ops_3d', globals(), 'extension.ops_3d')
+from tree_segmentation.extension import ops_3d
 
 
 class Viewer3D(ImageViewer):
