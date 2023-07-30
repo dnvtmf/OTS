@@ -2,7 +2,7 @@ import hashlib
 from pathlib import Path
 from typing import Union
 
-import matplotlib
+import seaborn as sns
 import matplotlib.pyplot as plt
 import numpy as np
 import torch
@@ -15,14 +15,14 @@ from tree_segmentation.extension import utils
 
 def color_mask(mask: np.ndarray, max_value=None):
     if max_value is None:
-        max_value = mask.max()
+        max_value = mask.max()  # noqa
     mask = mask.astype(np.int32)
-    cmap = matplotlib.colormaps['viridis'].resampled(max_value + 2)
-    random_order = np.arange(max_value + 2)
-    random_order[1:] = np.random.permutation(random_order[1:])
-    mask = random_order[mask]
-    mask_image = cmap(mask)
-    mask_image = np.where(mask[:, :, None] == 0, 1., mask_image)
+    # cmap = matplotlib.colormaps['viridis'].resampled(max_value + 2)
+    # random_order = np.arange(max_value + 2)
+    # random_order[1:] = np.random.permutation(random_order[1:])
+    colors = np.array([[1, 1, 1]] + sns.color_palette(n_colors=max_value))
+    mask_image = colors[mask]
+    # mask_image = np.where(mask[:, :, None] == 0, 1., mask_image)
     return mask_image[..., :3].astype(np.float32)
 
 
@@ -74,7 +74,7 @@ def show_masks(image, *masks, mask=None, alpha=None):
 
 
 def image_add_points(image: np.ndarray, points: np.ndarray, s=5):
-    if points.max() <= 1.1:
+    if points.max() <= 1.1:  # noqa
         points = points * np.array([image.shape[1], image.shape[0]])
     image = image.copy()
     H, W = image.shape[:2]

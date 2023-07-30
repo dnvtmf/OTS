@@ -46,3 +46,4 @@ dependencies:
             - imageio-ffmpeg
             - torch_geometric
             - fvcore
+            - seaborn

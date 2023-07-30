@@ -36,7 +36,7 @@
 
 ## 1. <span id="S3DIS">S3DIS</span>
 
-![S3DIS](examples/S3DIS.png)
+![S3DIS](assets/S3DIS.png)
 
 S3DIS dataset, the complete point clouds are obtained without any manual intervention using the Matterport scanner. The dataset consists of 271 rooms belonging to 6 large-scale indoor scenes from 3 different buildings (total of 6020 square meters). These areas mainly include offices, educational and exhibition spaces, and conference rooms etc.
 
@@ -55,7 +55,7 @@ In more detail, the dataset is collected in 6 large-scale indoor areas that orig
 
 ## 2. <span id="Semantic3D">Semantic3D</span>
 
-![Semantic3D](examples/Semantic3D.png)
+![Semantic3D](assets/Semantic3D.png)
 
 Semantic3D comprises a total of around 4 billion 3D points acquired with static terrestrial laser scanners, covering up to 160×240×30 meters in real-world 3D space. Point clouds belong to 8 classes (e.g. urban and rural) and contain 3D coordinates, RGB information, and intensity. Unlike 2D annotation strategies, 3D data labeling is easily amenable to over-segmentation where each point is individually assigned to a class label.
 
@@ -107,7 +107,7 @@ All scenes are reconstructed into triangle meshes and have per-vertex and per-pi
 
 ## 9. <span id="NYUv2"> NYUv2 </span>
 
-![NYUV2](examples/nyu_depth_v2_labeled.jpg)
+![NYUV2](assets/nyu_depth_v2_labeled.jpg)
 
 The dataset consists of 1449 RGBD images2, gathered from a wide range of commercial and residential buildings in three different US cities, comprising 464 different indoor scenes across 26 scene classes.A dense per-pixel labeling was obtained for each image using Amazon Mechanical Turk. If a scene contained multiple instances of an object class, each instance received a unique instance label, e.g. two different cups in the same image would be labeled: cup 1 and cup 2, to uniquely identify them. The dataset contains 35,064 distinct objects, spanning 894 different classes. For each of the 1449 images, support annotations were manually added. Each image’s support annotations consists of a set of 3-tuples: [Ri, Rj , type] where Riis the region ID of the supported object, Rj is the region ID of the supporting object and type indicates whether the support is from below (e.g. cup on a table) or from behind (e.g. picture on a wall). Examples of the dataset are found in Fig 7 (object category labels not shown).
 
@@ -124,7 +124,7 @@ The Habitat-Matterport 3D Semantics Dataset (HM3DSem) is the largest-ever datase
 
 ## 11. <span id="Replica"> Replica</span>
 
-![](examples/Replica_1.png)
+![](assets/Replica_1.png)
 
 The Replica Dataset is a dataset of high quality reconstructions of a variety of indoor spaces. Each reconstruction has clean dense geometry, high resolution and high dynamic range textures, glass and mirror surface information, planar segmentation as well as semantic class and instance segmentation. See the technical report for more details.
 

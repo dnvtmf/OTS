@@ -81,7 +81,6 @@ class TreePredictor:
         in_threshold=0.90,
         in_thre_area=10,
         union_threshold=0.10,
-        filled_threshold=0.9,
         sample_limit_fn=None,
         device=None,
     ) -> TreeData:

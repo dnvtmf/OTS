@@ -1,5 +1,5 @@
-from typing import Optional, Tuple
-
+from typing import Optional, Tuple, Union
+from pathlib import Path
 import numpy as np
 import torch
 from torch import Tensor
@@ -13,6 +13,8 @@ from segment_anything.utils.amg import (
     rle_to_mask,
     remove_small_regions,
 )
+
+from tree_segmentation.extension import utils
 
 
 class TreeStructure:
@@ -236,6 +238,10 @@ class TreeData(TreeStructure):
         self.num_samples = torch.zeros(num + 1, dtype=torch.int, device=device)
 
     @property
+    def num_masks(self) -> int:
+        return self.num_samples.shape[0] - 1
+
+    @property
     def is_compressed(self):
         return self._is_compressed
 
@@ -278,6 +284,7 @@ class TreeData(TreeStructure):
         self.num_samples[idx] = self.num_samples[old]
 
     def node_rearrange(self, indices=None):
+        self.uncompress()
         indices, _ = super().node_rearrange(indices)
         self.num_samples[:len(indices)] = self.num_samples[indices]
 
@@ -347,6 +354,7 @@ class TreeData(TreeStructure):
     def sample_unfilled(self, num_points=1024, threshold=0.9) -> Tuple[Optional[np.ndarray], Optional[Tensor]]:
         if self.data is None:
             return np.random.random((num_points, 2)), None
+        self.uncompress()
         N, H, W = self.data['masks'].shape
         level = 0
         for level, nodes in enumerate(self.get_levels()):
@@ -389,6 +397,7 @@ class TreeData(TreeStructure):
         """当某一mask的采样的点的数量 < sample_limit_fn(area) 时, 从该mask中采样点"""
         if self.first[0] <= 0:
             return np.random.random((num_points, 2))
+        self.uncompress()
 
         if sample_limit_fn is None:  # 默认采样点数限制函数: 面积的平方根
             sample_limit_fn = lambda area: np.sqrt(area.item())
@@ -413,6 +422,7 @@ class TreeData(TreeStructure):
 
     @torch.no_grad()
     def sample_each_mask(self, num_point_per_mask=1) -> np.ndarray:
+        self.uncompress()
         self.remove_not_in_tree()
         points = []
         _, H, W = self.data['masks'].shape
@@ -516,8 +526,7 @@ class TreeData(TreeStructure):
         raise NotImplementedError
 
     def save(self, filename, **kwargs):
-        self.compress()
-        data = {} if self.data is None else {k: v for k, v in self.data.items()}
+        data = {} if self.data is None else {k: self._compress() if k == 'masks' else v for k, v in self.data.items()}
         data.update({
             'parent': self.parent,
             'first': self.first,
@@ -533,7 +542,7 @@ class TreeData(TreeStructure):
                 print(f"[Tree2D]save now Tree2D to {filename}")
         return data
 
-    def load(self, filename, **data):
+    def load(self, filename: Union[str, Path, None], **data):
         if filename is not None:
             data.update(**torch.load(filename, map_location=self.device))
             if self.verbose > 0:
@@ -546,6 +555,7 @@ class TreeData(TreeStructure):
         self.num_samples = data.pop('num_samples')
         extra = data.pop('extra')
         self.data = MaskData(**data) if len(data) > 0 else None
+        print(utils.show_shape({k: v for k, v in self.data.items()}, self.num_samples))
         self._is_compressed = True
         return extra
 
@@ -580,24 +590,17 @@ class TreeData(TreeStructure):
                 unchanged = unchanged and not changed
                 self.data['masks'][nodes[order[i]] - 1].copy_(torch.from_numpy(mask).to(masks))
         # re-build segmentation tree
-        if not unchanged:
-            self.cnt = 0
-            self.update_tree()
+        self.cnt = 0
+        self.first[0] = -1
+        self.update_tree()
         self.compress()
         if self.verbose > 0:
             print(f"[Tree2D] complete post process")
         return self
 
-    def compress(self):
-        """save masks use multi-level tensor, all mask in same level do not intersection"""
+    def _compress(self):
         if self.is_compressed:
-            return
-        self._is_compressed = True
-        if self.data is None:
-            return
-        if self.verbose > 0:
-            print(f"[Tree2D] Compress masks")
-        self.remove_not_in_tree()
+            return self.data['masks']
         masks = []
         for level, nodes in enumerate(self.get_levels()):
             if level == 0:
@@ -606,28 +609,50 @@ class TreeData(TreeStructure):
             for i in nodes:
                 mask[self.data['masks'][i - 1]] = i
             masks.append(mask)
-        self.data['masks'] = torch.stack(masks, dim=0)
+        return torch.stack(masks, dim=0)
+
+    def compress(self):
+        """save masks use multi-level tensor, all mask in same level do not intersection"""
+        if self.is_compressed:
+            return
+        if self.data is None:
+            return
+        if self.verbose > 0:
+            print(f"[Tree2D] Compress masks")
+        self.remove_not_in_tree()
+        self.data['masks'] = self._compress()
+        self._is_compressed = True
+
+    def _uncompress(self):
+        print('is_compressed:', self.is_compressed)
+        if not self.is_compressed:
+            return self.data['masks']
+        masks = self.data['masks']
+        assert masks.max() <= self.num_masks
+        masks_u = torch.zeros((self.num_masks, *masks.shape[1:]), dtype=torch.bool, device=self.device)
+        for level, nodes in enumerate(self.get_levels()):
+            if level == 0:
+                continue
+            assert 1 <= nodes.min() and nodes.max() <= self.num_masks and 1 <= level <= len(masks)
+            for i in nodes:
+                masks_u[i - 1] = masks[level - 1] == i
+        return masks_u
 
     def uncompress(self):
         if not self.is_compressed:
             return
-        self._is_compressed = False
         if self.data is None:
             return
         if self.verbose > 0:
             print(f"[Tree2D] uncompress masks")
-        masks = self.data['masks']
-        self.data['masks'] = torch.zeros((self.cnt, *masks.shape[1:]), dtype=torch.bool, device=self.device)
-        for level, nodes in enumerate(self.get_levels()):
-            if level == 0:
-                continue
-            for i in nodes:
-                self.data['masks'][i - 1] = masks[level - 1] == i
+        self.data['masks'] = self._uncompress()
+        self._is_compressed = False
 
-    def mask(self, index) -> Optional[Tensor]:
+    @property
+    def masks(self) -> Optional[Tensor]:
         if self.data is None:
             return None
-        elif not self.is_compressed:
-            return self.data['masks'][index]
         else:
+            self.uncompress()
+
             return self.data['masks']
