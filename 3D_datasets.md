@@ -2,35 +2,35 @@
 
 ## Overview
 
-| Dataset                   | 内容(格式*)       | 场景/部件数 | 图片数            | 类别数 | 语义 | 实例 | 部件 | 已下载 |
-|---------------------------|---------------|--------|----------------|-----|----|----|----|-----|
-| [S3DIS/2D-3D-S](#S3DIS)   | indoor (MDIP) | 6      | 70,496 (1,413) | 13  | ✓  | ✓  |    | ✓   |
-| [Semantic3D](#Semantic3D) | urban (IP)    |        |                | 8   | ✓  |
+| Dataset                   | 内容(格式*)   | 场景/部件数 | 图片数         | 类别数 | 语义 | 实例 | 部件 | 已下载 |
+| ------------------------- | ------------- | ----------- | -------------- | ------ | ---- | ---- | ---- | ------ |
+| [S3DIS/2D-3D-S](#S3DIS)   | indoor (MDIP) | 6           | 70,496 (1,413) | 13     | ✓    | ✓    |      | ✓      |
+| [Semantic3D](#Semantic3D) | urban (IP)    |             |                | 8      | ✓    |
 | [SemanticKITTI](#KITTI)   |
-| [ScanNet](#ScaneNet)      |               | 1513   |
-| [ShapeNet](#ShapeNet)     | shapes (M)    | 31,963 |
+| [ScanNet](#ScaneNet)      |               | 1513        |
+| [ShapeNet](#ShapeNet)     | shapes (M)    | 31,963      |
 | NYUv1                     |
-| [NYUv2](#NYUv2)           | Indoor (ID)   | 1449   |                | 894 |    | ✓  |    |     |
-| SUN RGB-D                 |               | 10K    |
-| [SceneNN](#SceneNN)       | indoor (MID)  | 100    |                | 22  |    | ✓  |    | ✓   |
+| [NYUv2](#NYUv2)           | Indoor (ID)   | 1449        |                | 894    |      | ✓    |      |        |
+| SUN RGB-D                 |               | 10K         |
+| [SceneNN](#SceneNN)       | indoor (MID)  | 100         |                | 22     |      | ✓    |      | ✓      |
 | RueMonge2014              |
 | Semantic3D                |
 | PL3D                      |
 | Matterport3D              |
-| HM3DSem                   | indoor        | 216    |                | 106 |    |    |    |     |
+| HM3DSem                   | indoor        | 216         |                | 106    |      |      |      |        |
 | HoME                      |               |
 | House3D                   |
 | [PSB](#PSB)               |
-| [COSEG](#COSEG)           |               | 180    |                | 8   |    |    | ✓  | ✓   |
-| [UDA_Part](#UDA_Part)     |               | 21     |                | 6   |    |    | ✓  | ✓   |
-| ShapeNet-Part             |               | 15,776 |                | 16  |    |    | ✓  | ✓   |
-| [PartNet](#PartNet)       |               | 5,662  |                | 4   |    |    | ✓  | ✓   |
-| TUM                       |               | 47     |
-| RGBD-v2                   |               | 17     |
-| SUN 3D                    |               | 254    |
-| Paris-CARLA-3D            | Outdoor(P)    |        |                |     | ✓  | ✓  |    |     |
-| [Replica](#Replica)       | Indoor (M)    | 18     |                | 88  | ✓  | ✓  |    | ✓   |
-| HM3D(#HM3D)               | Indoor        | 1000   |                |     |    |    |    |     |
+| [COSEG](#COSEG)           |               | 180         |                | 8      |      |      | ✓    | ✓      |
+| [UDA_Part](#UDA_Part)     |               | 21          |                | 6      |      |      | ✓    | ✓      |
+| ShapeNet-Part             |               | 15,776      |                | 16     |      |      | ✓    | ✓      |
+| [PartNet](#PartNet)       |               | 5,662       |                | 4      |      |      | ✓    | ✓      |
+| TUM                       |               | 47          |
+| RGBD-v2                   |               | 17          |
+| SUN 3D                    |               | 254         |
+| Paris-CARLA-3D            | Outdoor(P)    |             |                |        | ✓    | ✓    |      |        |
+| [Replica](#Replica)       | Indoor (M)    | 18          |                | 88     | ✓    | ✓    |      | ✓      |
+| HM3D(#HM3D)               | Indoor        | 1000        |                |        |      |      |      |        |
 
 *格式: M: Mesh, D: Depth, I: Images, P: Point Clouds
 
@@ -97,7 +97,7 @@ ShapeNet dataset has a novel scalable method for efficient and accurate geometri
 
 ## 8. <span id="SceneNN">SceneNN</span>
 
-![SceneNN](/home/wan/wan_code/segmentation/datasets/examples/sceneNN.png)
+![SceneNN](assets/sceneNN.png)
 
 We introduce an RGB-D scene dataset consisting of more than 100 indoor scenes. Our scenes are captured at various places, e.g., offices, dormitory, classrooms, pantry, etc., from University of Massachusetts Boston and Singapore University of Technology and Design.
 All scenes are reconstructed into triangle meshes and have per-vertex and per-pixel annotation. We further enriched the dataset with fine-grained information such as axis-aligned bounding boxes, oriented bounding boxes, and object poses.

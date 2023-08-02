@@ -30,10 +30,14 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [x] [2D] add post propocess
 - [ ] [2D] metric set ignore nodes
 - [ ] [2D] run experiment on PASCAL VOC/Cityscapes
-- [ ] [3D] Tree3Dv2 to tree
+- [x] [3D] Tree3Dv2 to tree
+- [ ] [3D] 添加tree loss
+- [ ] [3D] 快速2D分割
+- [ ] [3D] 基于边的融合方法
 - [ ] [3D] add post-propocess
 - [ ] [GUI] 固定渲染颜色
 - [ ] [GUI] Edit 2D: 编辑模式
 - [ ] [GUI] Edit 2D: 右键单击显示上一层和下一层
 - [ ] [GUI] 合并save和load, 增加删除按钮
+- [ ] [3D] Tree3Dv2._get_masks 使用CUDA实现
 - [ ] [paper] start write

@@ -54,7 +54,7 @@ class TreeSegmentGUI(TreeSegment):
         self.image_dir = Path('~/Pictures').expanduser()
         self.image_index = 0
         self.image_paths = []
-        self._need_update_2d = True
+        self._need_update_2d = False
 
         dpg.create_context()
         # self.set_default_font()
@@ -85,15 +85,15 @@ class TreeSegmentGUI(TreeSegment):
             self.view_2d = ImageViewer(size=(512, 512), tag='image_sample', pos=(512, 0), no_resize=True, no_move=True)
             self.view_seg = ImageViewer(size=(512, 512), tag='image_seg', pos=(512, 512), no_resize=True, no_move=True)
             with dpg.window(
-                label='control',
-                tag='control',
-                width=512,
-                height=512 - 30,
-                pos=(0, 512),
-                no_close=True,
-                no_resize=True,
-                no_move=True,
-                # no_title_bar=True,
+                    label='control',
+                    tag='control',
+                    width=512,
+                    height=512 - 30,
+                    pos=(0, 512),
+                    no_close=True,
+                    no_resize=True,
+                    no_move=True,
+                    # no_title_bar=True,
             ):
                 # self.add_menu_bar()
                 self.make_control_panel()
@@ -284,11 +284,8 @@ class TreeSegmentGUI(TreeSegment):
         for i in range(1, 10):
             dpg.configure_item(f"level{i}", show=i < max_levels)
             # dpg.focus_item(f"level{i}")
-        if self.mode == 'E2D':
-            self.not_show_tree(self._2d_levels)
         self._2d_levels = levels
-        if self.mode == 'E2D':
-            self.show_tree()
+        self.show_tree_update()
 
     @property
     def now_level_2d(self):
@@ -302,7 +299,6 @@ class TreeSegmentGUI(TreeSegment):
         self._now_level_2d = level
         if self._now_level_2d >= -1:
             dpg.bind_item_theme(f"level{self._now_level_2d}", self.choose_theme)
-        self._need_update_2d = True
 
     @property
     def levels_3d(self):
@@ -313,11 +309,8 @@ class TreeSegmentGUI(TreeSegment):
         max_levels = len(levels)
         for i in range(1, 10):
             dpg.configure_item(f"depth{i}", show=i < max_levels)
-        if self.mode == 'E3D':
-            self.not_show_tree(self._3d_levels)
         self._3d_levels = levels
         if self.mode == 'E3D':
-            self.show_tree()
             if dpg.does_alias_exist(f"tree_{self.choose_mask}"):
                 dpg.bind_item_theme(f"tree_{self.choose_mask}", self.choose_theme)
 
@@ -342,7 +335,11 @@ class TreeSegmentGUI(TreeSegment):
         # print('index:', index)
         if index == self._choose_mask:
             index = None
-        ch_tree = self._choose_mask is not None and self.now_level_2d > 0
+        ch_tree = self._choose_mask is not None
+        if self.mode == 'E2D':
+            ch_tree = ch_tree and self.now_level_2d > 0
+        # else:
+        #     ch_tree = ch_tree and self.now_level_3d > 0
         if ch_tree and dpg.does_item_exist(f"tree_{self._choose_mask}"):
             dpg.bind_item_theme(f"tree_{self._choose_mask}", self.default_theme)
         self._choose_mask = index
@@ -373,27 +370,26 @@ class TreeSegmentGUI(TreeSegment):
         self._loading_mesh = False
         self.save_ini()
 
-    def not_show_tree(self, levels):
+    def show_tree_update(self):
+        # remove old tree nodes
+        def _remove_children(name):
+            for child in dpg.get_item_children(name, 1):
+                _remove_children(child)
+                dpg.delete_item(child)
+
+        _remove_children(f"tree_0")
         if self.mode == 'S3D':
             return
-        for nodes in reversed(levels):
-            for x in nodes:
-                x = x.item()
-                if x > 0:
-                    dpg.delete_item(f"tree_{x}")
-
-    def show_tree(self):
-        if self.mode == 'E2D':
-            levels = self.levels_2d
+        elif self.mode == 'E2D':
+            if self._tree_2d is None:
+                return
             tree = self.tree2d
-            # tree.print_tree()
-        elif self.mode == 'E3D':
-            levels = self.levels_3d
-            tree = self.tree3d
         else:
-            return
-        # print('[GUI]: show tree')
-        for level, nodes in enumerate(levels):
+            if self._tree_3d is None:
+                return
+            tree = self.tree3d
+        # insert new tree nodes
+        for level, nodes in enumerate(tree.get_levels()):
             if level == 0:
                 continue
             # print(nodes)
@@ -410,7 +406,7 @@ class TreeSegmentGUI(TreeSegment):
                 )
                 dpg.bind_item_theme(f"tree_{x}", self.default_theme)
         dpg.configure_item('tree_0', default_open=True)
-        return
+        print('[GUI]: update show tree')
 
     def get_value(self, name, default=None):
         if dpg.does_alias_exist(name):
@@ -428,6 +424,7 @@ class TreeSegmentGUI(TreeSegment):
             return default
 
     def _set_value(self, name, value):
+
         def setter(*args):
             return setattr(self, name, value)
 
@@ -441,6 +438,7 @@ class TreeSegmentGUI(TreeSegment):
         return wrapper
 
     def _cbw2(self, cls, func, *args, update_3d=False, **kwargs):
+
         def wrapper():
             if isinstance(func, str):
                 res = getattr(cls, func)(*args, **kwargs)
@@ -576,6 +574,7 @@ class TreeSegmentGUI(TreeSegment):
     def reset_3d(self):
         self.now_level_3d = 0
         super().reset_3d()
+        self.show_tree_update()
         self.view_3d.need_update = True
 
     def reload(self):
@@ -610,6 +609,7 @@ class TreeSegmentGUI(TreeSegment):
         self.tree2d.update_tree()
         self.tree2d.remove_not_in_tree()
         self.levels_2d = self.tree2d.get_levels()
+        self.show_tree_update()
         self.now_level_2d = 0
 
     def run_tree_seg_2d_stage2(self):
@@ -635,6 +635,7 @@ class TreeSegmentGUI(TreeSegment):
         self.tree2d.update_tree()
         self.tree2d.remove_not_in_tree()
         self.levels_2d = self.tree2d.get_levels()
+        self.show_tree_update()
         self.now_level_2d = 0
         return True
 
@@ -653,9 +654,7 @@ class TreeSegmentGUI(TreeSegment):
             self.tree2d.reset(
                 MaskData(
                     masks=masks.to(self.tree2d.device),
-                    iou_preds=torch.zeros(masks.shape[0], device=self.tree2d.device)
-                )
-            )
+                    iou_preds=torch.zeros(masks.shape[0], device=self.tree2d.device)))
             # self.tree_data.update_tree()
             # print(utils.show_shape(self.tree_data.data, self.tree_data.parent))
             # print(indices)
@@ -681,15 +680,17 @@ class TreeSegmentGUI(TreeSegment):
                 save = dpg.get_value('save_tree_data')
             if save:
                 num = len(list(self.cache_dir.glob('*.data'))) + 1
-                torch.save({
-                    'tree_data': self.tree2d.save(filename=None),
-                    'image': self.image,
-                    'tri_id': self.tri_id,
-                    'Tw2v': self.Tw2v,
-                }, self.cache_dir.joinpath(f'{num:04d}.data'))
+                torch.save(
+                    {
+                        'tree_data': self.tree2d.save(filename=None),
+                        'image': self.image,
+                        'tri_id': self.tri_id,
+                        'Tw2v': self.Tw2v,
+                    }, self.cache_dir.joinpath(f'{num:04d}.data'))
                 dpg.set_item_label('load_data', f"Load ({num})")
                 print(f'[GUI] save data, index={num}')
             dpg.get_item_callback(f"depth{self.now_level_3d}")()
+            self.show_tree_update()
 
     def run_tree_3d_cycle(self):
         N = dpg.get_value('N_cycle')
@@ -795,8 +796,12 @@ class TreeSegmentGUI(TreeSegment):
                 if mask_id < 0:
                     self.view_3d.data = self.view_3d.origin_data
                 else:
-                    mask = self.aux_data_3d[self.levels_3d[self.now_level_3d][mask_id].item()][0]
-                    self.view_3d.data = image_add_mask_boundary(self.view_3d.origin_data, mask)
+                    # may error when change level
+                    if 1 <= self.now_level_3d < len(self.levels_3d):
+                        nodes = self.levels_3d[self.now_level_3d]
+                        if 0 <= mask_id < len(nodes):
+                            mask = self.aux_data_3d[nodes[mask_id].item()][0]
+                            self.view_3d.data = image_add_mask_boundary(self.view_3d.origin_data, mask)
         else:
             if self.view_3d._origin_data is not None:
                 self.view_3d.data = self.view_3d._origin_data
@@ -867,7 +872,7 @@ class TreeSegmentGUI(TreeSegment):
             if mask_id > 0:
                 print('click:', mask_id)
                 self.choose_mask = mask_id + 1
-                self._need_update_2d = True
+                self._need_update_2d = self.mode != 'E3D'
         if dpg.is_item_left_clicked(self.view_2d.image_tag):
             if self._2d_mask is None:
                 return
@@ -881,7 +886,7 @@ class TreeSegmentGUI(TreeSegment):
             if mask_id > 0:
                 print('click:', mask_id)
                 self.choose_mask = mask_id + 1
-                self._need_update_2d = True
+                self._need_update_2d = self.mode != 'E3D'
         # if dpg.is_item_left_clicked(self.view_3d.image_tag):
         #     if self._2d_mask is None:
         #         return
@@ -936,6 +941,8 @@ class TreeSegmentGUI(TreeSegment):
                 self.choose_mask = None
             if self.mode == 'E3D':
                 self.view_3d.need_update = True
+            elif self.mode == 'E2D':
+                self._need_update_2d = True
         elif dpg.is_key_pressed(dpg.mvKey_Right):
             if self.mode != 'S3D' and cnt > 0:
                 choose_mask = cnt if self.choose_mask is None else self.choose_mask
@@ -954,6 +961,8 @@ class TreeSegmentGUI(TreeSegment):
                 self.choose_mask = None
             if self.mode == 'E3D':
                 self.view_3d.need_update = True
+            elif self.mode == 'E2D':
+                self._need_update_2d = True
 
     def callback_exit(self):
         self.save_ini()
@@ -973,6 +982,7 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_button(label=self._model_type, tag='change_model', height=30)
 
             def change_model(name='SAM'):
+
                 def change(*args):
                     if self._model_type != name:
                         self._predictor = None
@@ -1001,14 +1011,12 @@ class TreeSegmentGUI(TreeSegment):
                     max_value=180.,
                     default_value=math.degrees(self.view_3d.fovy),
                     callback=lambda *args: self.view_3d.set_fovy(dpg.get_value('set_fovy')),
-                    tag='set_fovy'
-                )
+                    tag='set_fovy')
 
             def change_eye(*args):
                 print('change camera position', args)
-                self.view_3d.eye = self.view_3d.eye.new_tensor([
-                    dpg.get_value(item) for item in ['eye_x', 'eye_y', 'eye_z']
-                ])
+                self.view_3d.eye = self.view_3d.eye.new_tensor(
+                    [dpg.get_value(item) for item in ['eye_x', 'eye_y', 'eye_z']])
                 self.view_3d.need_update = True
 
             with dpg.group(horizontal=True):
@@ -1085,13 +1093,10 @@ class TreeSegmentGUI(TreeSegment):
 
         with dpg.group(horizontal=True):
             dpg.add_text('alpha')
-            dpg.add_slider_float(min_value=0,
-                max_value=1.,
-                default_value=0.5,
-                tag='alpha',
-                callback=self.update_viewer)
+            dpg.add_slider_float(min_value=0, max_value=1., default_value=0.5, tag='alpha', callback=self.update_viewer)
 
         def changed_callback(item):
+
             def changed(*args):
                 if self._predictor is not None:
                     setattr(self._predictor, item, dpg.get_value(item))
@@ -1105,13 +1110,13 @@ class TreeSegmentGUI(TreeSegment):
 
     def make_edit_2d_options(self):
         with dpg.file_dialog(
-            directory_selector=False,
-            show=False,
-            callback=self.change_image,
-            id="choose_image",
-            width=700,
-            height=400,
-            default_path=self.image_dir.as_posix(),
+                directory_selector=False,
+                show=False,
+                callback=self.change_image,
+                id="choose_image",
+                width=700,
+                height=400,
+                default_path=self.image_dir.as_posix(),
         ):
             dpg.add_file_extension("Image{.png,.jpg,.jpeg,.tif}", custom_text='[Image]')
         with dpg.group(horizontal=True):
@@ -1132,8 +1137,7 @@ class TreeSegmentGUI(TreeSegment):
                 width=60,
                 min_clamped=True,
                 min_value=128,
-                callback=self._cbw(self.change_image)
-            )
+                callback=self._cbw(self.change_image))
             dpg.add_text('max=')
             dpg.add_input_int(
                 default_value=1024,
@@ -1142,8 +1146,7 @@ class TreeSegmentGUI(TreeSegment):
                 width=60,
                 min_clamped=True,
                 min_value=128,
-                callback=self._cbw(self.change_image)
-            )
+                callback=self._cbw(self.change_image))
             dpg.add_text('show points:')
             dpg.add_checkbox(tag='show_points', callback=self._set_value('_need_update_2d', True))
 
@@ -1167,19 +1170,20 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_button(width=W, height=H, label='AutoRun', callback=self.autorun_tree_seg_2d)
 
     def make_3d_tree_segmentation_options(self):
+
         def update_view_3d(*args):
             self.view_3d.need_update = True
             # print('need update view3d')
 
         with dpg.file_dialog(
-            # directory_selector=False,
-            show=False,
-            callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
-            id="choose_mesh",
-            width=700,
-            height=400,
-            default_path='/home/wan/data/meshes',
-            modal=True,
+                # directory_selector=False,
+                show=False,
+                callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
+                id="choose_mesh",
+                width=700,
+                height=400,
+                default_path='/home/wan/data/meshes',
+                modal=True,
         ):
             dpg.add_file_extension("Mesh{.obj,.ply}", custom_text='mesh')
             with dpg.group(horizontal=True):
@@ -1274,8 +1278,7 @@ class TreeSegmentGUI(TreeSegment):
                 with dpg.table_cell():
                     num = len(list(self.cache_dir.glob('*.data')))
                     dpg.add_button(
-                        label=f'Load ({num})', tag='load_data', width=W, height=H, callback=self.run_tree_3d_load
-                    )
+                        label=f'Load ({num})', tag='load_data', width=W, height=H, callback=self.run_tree_3d_load)
 
                 def clean_all_data(*args):
                     utils.dir_create_and_clear(self.cache_dir, '*.data')
@@ -1297,8 +1300,7 @@ class TreeSegmentGUI(TreeSegment):
             pos=(512 - 30 - 10, 256),
             width=30,
             height=30,
-            callback=lambda: self.copy_camera_pose(to_2d=True)
-        )
+            callback=lambda: self.copy_camera_pose(to_2d=True))
         dpg.add_button(
             parent=self.view_2d.win_tag,
             label='<',
@@ -1306,8 +1308,7 @@ class TreeSegmentGUI(TreeSegment):
             pos=(10, 256),
             width=30,
             height=30,
-            callback=lambda: self.copy_camera_pose(to_2d=False)
-        )
+            callback=lambda: self.copy_camera_pose(to_2d=False))
         dpg.add_button(
             parent=self.view_3d.win_tag,
             label='UV',
@@ -1315,20 +1316,15 @@ class TreeSegmentGUI(TreeSegment):
             pos=(512 - 30 - 10, 210),
             width=30,
             height=30,
-            callback=lambda: self.show_uv_results
-        )
+            callback=lambda: self.show_uv_results)
 
     def make_3d_edit_options(self):
         W, H, P = 50, 40, 10
         with dpg.group(horizontal=True):
-            dpg.add_button(
-                label='Mesh',
-                width=W,
-                height=H,
-                callback=lambda: dpg.show_item("choose_mesh")
-            )
+            dpg.add_button(label='Mesh', width=W, height=H, callback=lambda: dpg.show_item("choose_mesh"))
             dpg.add_button(label='Save', width=W, height=H, callback=self.save_result)
             dpg.add_button(label='Load', width=W, height=H, callback=self.load_result)
+            dpg.add_button(label='Reset', width=W, height=H, callback=self.reset_3d)
             dpg.add_button(label='Run', width=W, height=H, callback=self.run_edit_3d)
         with dpg.group(horizontal=True):
             dpg.add_text('Epochs')
@@ -1338,12 +1334,7 @@ class TreeSegmentGUI(TreeSegment):
         with dpg.group(horizontal=True):
             dpg.add_text('edit_threshold')
             dpg.add_slider_float(
-                min_value=0,
-                max_value=1.,
-                default_value=0.5,
-                tag='edit_threshold',
-                callback=self.set_edit_3d_threshold
-            )
+                min_value=0, max_value=1., default_value=0.5, tag='edit_threshold', callback=self.set_edit_3d_threshold)
             dpg.add_button(label='set', callback=self.set_edit_3d_threshold)
 
     def make_bottom_status_options(self):
@@ -1358,7 +1349,10 @@ class TreeSegmentGUI(TreeSegment):
         dpg.push_container_stack(self.view_seg.win_tag)
         for i, level in enumerate(range(-1, 10)):
             dpg.add_button(
-                label={0: 'T', -1: 'I'}[level] if level <= 0 else f"{level}",
+                label={
+                    0: 'T',
+                    -1: 'I'
+                }[level] if level <= 0 else f"{level}",
                 pos=(pad + (size + pad) * i, pad),
                 width=size,
                 height=size,
@@ -1375,6 +1369,7 @@ class TreeSegmentGUI(TreeSegment):
         pad = 10
 
         def show_level_callback(level):
+
             def show_level():
                 self.now_level_3d = level
                 return
@@ -1390,8 +1385,7 @@ class TreeSegmentGUI(TreeSegment):
                 height=size,
                 tag=f'depth{level}',
                 show=level == 0,
-                callback=show_level_callback(level)
-            )
+                callback=show_level_callback(level))
             dpg.bind_item_theme(f"depth{level}", self.default_theme)
         dpg.pop_container_stack()
 
@@ -1449,12 +1443,15 @@ class TreeSegmentGUI(TreeSegment):
         dpg.set_viewport_height(H)
         for i, level in enumerate(range(-1, 10)):
             dpg.set_item_pos(f"level{level}", pos=[10 + (30 + 10) * i, H2])
-
         self.save_ini()
+        self._need_update_2d = True
 
     def set_default_font(self, name='wqy-zenhei', fontsize=16):
-        font_serach_dirs = [Path('segment_anything').resolve(), Path('/usr/share/fonts'),
-                            Path('~/.local/share/fonts').expanduser()]
+        font_serach_dirs = [
+            Path('segment_anything').resolve(),
+            Path('/usr/share/fonts'),
+            Path('~/.local/share/fonts').expanduser()
+        ]
         with dpg.font_registry() as self.font_registry_id:
             for search_path in font_serach_dirs:  # type: Path
                 paths = list(search_path.rglob(f'{name}.*'))
@@ -1524,6 +1521,7 @@ class TreeSegmentGUI(TreeSegment):
         dpg.set_item_pos('load_popup', dpg.get_item_pos('control'))
 
         def _load(load_path: Path):
+
             def __load():
                 if self.mode == 'E2D':
                     self.reset_2d()
@@ -1538,6 +1536,7 @@ class TreeSegmentGUI(TreeSegment):
                     self.view_3d.need_update = True
                 print(f'[GUI]: load results from {load_path}')
                 dpg.hide_item("load_popup")
+                self.show_tree_update()
 
             return __load
 
@@ -1550,15 +1549,16 @@ class TreeSegmentGUI(TreeSegment):
     def save_ini(self):
         ini_path = self.cache_root.joinpath('tree_3d_seg.ini')
         with ini_path.open('w', encoding='utf-8') as f:
-            yaml.dump({
-                'mesh_path': self.mesh_path.as_posix(),
-                '_mode': self._mode,
-                '_model_type': self._model_type,
-                'image_dir': self.image_dir.as_posix(),
-                'image_index': self.image_index,
-                'viewport_pos': dpg.get_viewport_pos(),
-                'mesh_history': self._mesh_history,
-            }, f)
+            yaml.dump(
+                {
+                    'mesh_path': self.mesh_path.as_posix(),
+                    '_mode': self._mode,
+                    '_model_type': self._model_type,
+                    'image_dir': self.image_dir.as_posix(),
+                    'image_index': self.image_index,
+                    'viewport_pos': dpg.get_viewport_pos(),
+                    'mesh_history': self._mesh_history,
+                }, f)
 
     def load_ini(self):
         ini_path = self.cache_root.joinpath('tree_3d_seg.ini')

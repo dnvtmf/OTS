@@ -34,3 +34,4 @@ from .progress_bar import ProgressBar
 from .memory import retry_if_cuda_oom
 from .gui import *
 from .open3d_utils import to_open3d_type
+from .time_estimator import *

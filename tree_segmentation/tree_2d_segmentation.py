@@ -545,8 +545,6 @@ class TreeData(TreeStructure):
     def load(self, filename: Union[str, Path, None], **data):
         if filename is not None:
             data.update(**torch.load(filename, map_location=self.device))
-            if self.verbose > 0:
-                print('[Tree2D] load Tree2D from:', filename)
         self.parent = data.pop('parent')
         self.first = data.pop('first')
         self.next = data.pop('next')
@@ -555,8 +553,10 @@ class TreeData(TreeStructure):
         self.num_samples = data.pop('num_samples')
         extra = data.pop('extra')
         self.data = MaskData(**data) if len(data) > 0 else None
-        print(utils.show_shape({k: v for k, v in self.data.items()}, self.num_samples))
         self._is_compressed = True
+        self.to(self.device)
+        if self.verbose > 0:
+            print(f'[Tree2D] loaded from file {filename} or input data')
         return extra
 
     def to(self, device):
@@ -624,7 +624,7 @@ class TreeData(TreeStructure):
         self._is_compressed = True
 
     def _uncompress(self):
-        print('is_compressed:', self.is_compressed)
+        # print('is_compressed:', self.is_compressed)
         if not self.is_compressed:
             return self.data['masks']
         masks = self.data['masks']
@@ -654,5 +654,26 @@ class TreeData(TreeStructure):
             return None
         else:
             self.uncompress()
-
             return self.data['masks']
+
+    @property
+    def scores(self):
+        if self.data is None:
+            return None
+        return self.data['iou_preds']
+
+    def remove_background(self, background: Tensor, threshold=0.5):
+        """The masks belong to background"""
+        self.uncompress()
+        keep = torch.ones(len(self.data['masks']), device=self.device, dtype=torch.bool)
+        for i in range(len(keep)):
+            mask = self.data['masks'][i]
+            if (mask & background).sum() / mask.sum() >= threshold:  # remove when area rate >= threshold
+                keep[i] = False
+        if keep.all():
+            return
+        self.filter(keep)
+        self.update_tree()
+        self.remove_not_in_tree()
+        if self.verbose > 0:
+            print('[Tree2D] remove backbground')

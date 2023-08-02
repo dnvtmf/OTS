@@ -5,6 +5,9 @@ weights/
 *.tree2d
 *.tree3d
 *.tree3dv2
+_C/
+
+.vscode
 
 
 /type_hint/

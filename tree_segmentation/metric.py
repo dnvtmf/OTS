@@ -62,6 +62,7 @@ class TreeSegmentMetric:
         # output match result
         assert 0 <= pred_idx.min() and pred_idx.max() < len(indices_pd)
         assert 0 <= gt_idx.min() and gt_idx.max() < len(indices_gt)
+        iou = IoU[pred_idx, gt_idx]
         pred_idx = indices_pd.cpu().numpy()[pred_idx]
         gt_idx = indices_gt.cpu().numpy()[gt_idx]
         match = np.full(prediction.cnt + 1, -1, dtype=np.int32)
@@ -70,7 +71,7 @@ class TreeSegmentMetric:
         matched_iou = np.zeros(gt.cnt + 1, dtype=np.float32)
         match[pred_idx] = gt_idx
         matched[gt_idx] = pred_idx
-        match_iou[pred_idx] = matched_iou[gt_idx] = IoU[pred_idx, gt_idx]
+        match_iou[pred_idx] = matched_iou[gt_idx] = iou
         # print(match, match_iou, matched, matched_iou, sep='\n')
         return match, match_iou, matched, matched_iou
 
@@ -115,12 +116,12 @@ class TreeSegmentMetric:
 
     def calc_IoU_2d(self, prediction: TreeData, gt: TreeData) -> Tuple[Tensor, Tensor, Tensor]:
         indices_pd = torch.cat(prediction.get_levels(), dim=0)[1:] - 1  # do not care root
-        order = torch.argsort(prediction.data['iou_preds'][indices_pd], descending=True)  # sorted by score
+        order = torch.argsort(prediction.scores[indices_pd], descending=True)  # sorted by score
         indices_pd = indices_pd[order]
-        masks_pd = prediction.data['masks'][indices_pd].flatten(1, )
+        masks_pd = prediction.masks[indices_pd].flatten(1,)
 
         indices_gt = torch.cat(gt.get_levels(), dim=0)[1:] - 1  # do not care root
-        masks_gt = gt.data['masks'][indices_gt].flatten(1, )
+        masks_gt = gt.masks[indices_gt].flatten(1,)
         # get IoU
         area_pd = masks_pd.sum(dim=1)
         area_gt = masks_gt.sum(dim=1)

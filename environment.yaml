@@ -21,29 +21,30 @@ dependencies:
     #    - torchvision
     #    - torchaudio
     #    - pytorch-cuda
-    -   pip:
-            # torch
-            - torch >= 2.0.0
-            - torchvision
-            - torchaudio
-            # common
-            - json_tricks
-            - pycocotools
-            - opencv-python # <= 4.1.1.26 # to avoid Error: Cannot move to target thread
-            - psutil
-            - shutils
-            - h5py
-            - rich
-            - gpustat
-            - pytest
-            - yapf
-            - dearpygui
-            - einops
-            - open3d >= 0.15.2
-            - trimesh[all]
-            - transforms3d
-            - kornia
-            - imageio-ffmpeg
-            - torch_geometric
-            - fvcore
-            - seaborn
+    - pip:
+          # torch
+          - torch >= 2.0.0
+          - torchvision
+          - torchaudio
+          # common
+          - json_tricks
+          - pycocotools
+          - opencv-python # <= 4.1.1.26 # to avoid Error: Cannot move to target thread
+          - psutil
+          - shutils
+          - h5py
+          - rich
+          - gpustat
+          - pytest
+          - yapf
+          - dearpygui
+          - einops
+          - open3d >= 0.15.2
+          - trimesh[all]
+          - transforms3d
+          - kornia
+          - imageio-ffmpeg
+          - torch_geometric
+          - fvcore
+          - seaborn
+          #   - torch_scatter

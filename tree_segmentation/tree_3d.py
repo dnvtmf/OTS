@@ -118,8 +118,7 @@ class TreeSegment:
                 in_threshold=self.get_value('in_threshold'),
                 in_thres_area=self.get_value('in_area_threshold'),
                 union_threshold=self.get_value('union_threshold'),
-                min_area=self.get_value('min_area')
-            )
+                min_area=self.get_value('min_area'))
         if self._tree_2d.data is None and self.tri_id is not None:
             background = self.tri_id.eq(0)
             foreground = torch.logical_not(background)
@@ -242,12 +241,7 @@ class TreeSegment:
 
     def render_mesh(self, Tw2v: Tensor, image_size=1024, light_location=(0, 2., 0.)):
         return render_mesh(
-            self.glctx,
-            self.mesh,
-            Tw2v=Tw2v.to(self.device),
-            image_size=image_size,
-            light_location=light_location
-        )
+            self.glctx, self.mesh, Tw2v=Tw2v.to(self.device), image_size=image_size, light_location=light_location)
         # mesh: Mesh = self.mesh
         # Tw2v = Tw2v.to(self.device)
         # camera_pos = Tw2v.inverse()[:3, 3]
@@ -367,12 +361,13 @@ class TreeSegment:
                 save = self.get_value('save_tree_data')
             if save:
                 num = len(list(self.cache_dir.glob('*.data'))) + 1
-                torch.save({
-                    'tree_data': self.tree2d.save(filename=None),
-                    'image': self.image,
-                    'tri_id': self.tri_id,
-                    'Tw2v': self.Tw2v,
-                }, self.cache_dir.joinpath(f'{num:04d}.data'))
+                torch.save(
+                    {
+                        'tree_data': self.tree2d.save(filename=None),
+                        'image': self.image,
+                        'tri_id': self.tri_id,
+                        'Tw2v': self.Tw2v,
+                    }, self.cache_dir.joinpath(f'{num:04d}.data'))
                 print(f'[GUI] save data, index={num}')
 
     def run_tree_3d_cycle(self):
@@ -460,10 +455,8 @@ class TreeSegment:
                 adj_faces = adj_nodes[self.mesh.f_pos].any(dim=-1)
                 adj_nodes[self.mesh.f_pos[adj_faces]] = 1
             adj_faces = torch.nonzero(adj_nodes[self.mesh.f_pos].any(dim=-1)).squeeze()
-            _, f_pos, v_pos = xatlas.parametrize(
-                self.mesh.v_pos.cpu().numpy(),
-                self.mesh.f_pos[adj_faces].cpu().numpy()
-            )
+            _, f_pos, v_pos = xatlas.parametrize(self.mesh.v_pos.cpu().numpy(),
+                                                 self.mesh.f_pos[adj_faces].cpu().numpy())
         else:
             adj_faces = None
             _, f_pos, v_pos = xatlas.parametrize(self.mesh.v_pos.cpu().numpy(), self.mesh.f_pos.cpu().numpy())
@@ -518,6 +511,7 @@ def main():
     segment.run_tree_3d_cycle()
     segment.run_tree_3d_uniform()
     segment.run_tree_3d_load()
+
 
 # 概率图模型
 ## 理论框架
