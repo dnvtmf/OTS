@@ -18,7 +18,7 @@ from segment_anything.utils.amg import (
     mask_to_rle_pytorch,
 )
 from segment_anything.utils.transforms import ResizeLongestSide
-from tree_segmentation.tree_2d_segmentation import TreeData
+from tree_segmentation.tree_2d_segmentation import Tree2D
 
 
 # noinspection PyAttributeOutsideInit
@@ -83,22 +83,25 @@ class TreePredictor:
         union_threshold=0.10,
         sample_limit_fn=None,
         device=None,
-    ) -> TreeData:
+        verbose=0,
+    ) -> Tree2D:
         assert image.shape[-1] == 3
         self.set_image(image)
         init_points = build_point_grid(points_per_side)
         data = self.process_points(init_points)
 
-        tree_data = TreeData(
+        tree_data = Tree2D(
             data,
             in_threshold=in_threshold,
             union_threshold=union_threshold,
             min_area=min_mask_region_area,
             in_thres_area=in_thre_area,
-            device=device
+            device=device,
+            verbose=verbose,
         )
         tree_data.update_tree()
-        print('complete init segmentation')
+        if verbose > 0:
+            print('complete init segmentation')
 
         for step in range(max_iters):
             # points, unfilled_mask = tree_data.sample_unfilled(points_per_update, filled_threshold)
@@ -111,9 +114,10 @@ class TreePredictor:
             tree_data.update_tree()
             tree_data.remove_not_in_tree()
             tree_data.update_tree()
-
-            print(f'complete iter {step} update segmentation')
+            if verbose > 0:
+                print(f'complete iter {step} update segmentation')
         self.reset_image()
+        tree_data.post_process()
         # tree_data.to_numpy()
 
         # Filter small disconnected regions and holes in masks
@@ -140,8 +144,7 @@ class TreePredictor:
             data["boxes"].float(),
             data["iou_preds"],
             torch.zeros_like(data["boxes"][:, 0]),  # categories
-            iou_threshold=self.box_nms_thresh
-        )
+            iou_threshold=self.box_nms_thresh)
         data.filter(keep_by_nms)
 
         # Return to the original image frame
@@ -165,8 +168,7 @@ class TreePredictor:
 
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
         masks, iou_preds, _ = self.predict_torch(
-            in_points[:, None, :], in_labels[:, None], multimask_output=True, return_logits=True
-        )
+            in_points[:, None, :], in_labels[:, None], multimask_output=True, return_logits=True)
 
         # Serialize predictions and store in MaskData
         data = MaskData(
@@ -182,9 +184,8 @@ class TreePredictor:
             data.filter(keep_mask)
 
         # Calculate stability score
-        data["stability_score"] = calculate_stability_score(
-            data["masks"], self.model.mask_threshold, self.stability_score_offset
-        )
+        data["stability_score"] = calculate_stability_score(data["masks"], self.model.mask_threshold,
+                                                            self.stability_score_offset)
         if self.stability_score_thresh > 0.0:
             keep_mask = data["stability_score"] >= self.stability_score_thresh
             data.filter(keep_mask)
@@ -283,10 +284,9 @@ class TreePredictor:
           original_image_size (tuple(int, int)): The size of the image before transformation, in (H, W) format.
         """
         if self.model_type == 'SAM':
-            assert (
-                len(transformed_image.shape) == 4 and transformed_image.shape[1] == 3 and
-                max(*transformed_image.shape[2:]) == self.model.image_encoder.img_size
-            ), f"set_torch_image input must be BCHW with long side {self.model.image_encoder.img_size}."
+            assert (len(transformed_image.shape) == 4 and transformed_image.shape[1] == 3 and
+                    max(*transformed_image.shape[2:]) == self.model.image_encoder.img_size
+                   ), f"set_torch_image input must be BCHW with long side {self.model.image_encoder.img_size}."
         else:
             assert transformed_image.ndim == 4 and transformed_image.shape[1] == 3
         self.reset_image()
@@ -442,8 +442,7 @@ class TreePredictor:
                         'whole': False,
                         'seg': True,
                         'det': True
-                    }
-                )
+                    })
             iou_predictions = outputs["pred_ious"][0]
             low_res_masks = outputs["pred_masks"][0]
             low_res_masks = low_res_masks.view(*iou_predictions.shape, *low_res_masks.shape[-2:])
@@ -456,8 +455,7 @@ class TreePredictor:
 
             # Embed prompts
             sparse_embeddings, dense_embeddings = self.model.prompt_encoder(
-                points=points, boxes=boxes, masks=mask_input
-            )
+                points=points, boxes=boxes, masks=mask_input)
 
             # Predict masks
             low_res_masks, iou_predictions = self.model.mask_decoder(

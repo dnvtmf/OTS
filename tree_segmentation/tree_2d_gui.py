@@ -13,7 +13,7 @@ from tree_segmentation.extension import utils
 from tree_segmentation.extension.utils import ImageViewer
 from segment_anything.build_sam import Sam, build_sam
 import tree_segmentation
-from tree_segmentation.tree_2d_segmentation import MaskData, TreeData
+from tree_segmentation.tree_2d_segmentation import MaskData, Tree2D
 from tree_segmentation.predictor import TreePredictor
 
 
@@ -57,6 +57,7 @@ def image_add_mask_boundary(image: np.ndarray, mask: Tensor, color=(1., 0, 0)):
 
 
 class Tree2DGUI:
+
     def __init__(self, sam=None):
         self.device = torch.device('cuda')
         self._sam: Optional[Sam] = sam
@@ -67,7 +68,7 @@ class Tree2DGUI:
 
         self._predictor: Optional[TreePredictor] = None
 
-        self._tree_2d: Optional[TreeData] = None
+        self._tree_2d: Optional[Tree2D] = None
         self._2d_aux_data: Optional[Dict[Union[int, str], Tensor]] = None
         self._image: Optional[np.ndarray] = None
         self._points: Optional[np.ndarray] = None
@@ -186,7 +187,8 @@ class Tree2DGUI:
                 # if self.tree2d.first[x].item() <= 0:
                 #     dpg.add_text(f'{x}', tag=f"tree_{x}", parent=f"tree_{p}", indent=level * 10)
                 # else:
-                dpg.add_collapsing_header(label=f'{x}',
+                dpg.add_collapsing_header(
+                    label=f'{x}',
                     tag=f"tree_{x}",
                     parent=f"tree_{p}",
                     indent=level * 10,
@@ -270,15 +272,14 @@ class Tree2DGUI:
         return self._predictor
 
     @property
-    def tree2d(self) -> TreeData:
+    def tree2d(self) -> Tree2D:
         if self._tree_2d is None:
-            self._tree_2d = TreeData(
+            self._tree_2d = Tree2D(
                 in_threshold=self.get_value('in_threshold'),
                 in_thres_area=self.get_value('in_area_threshold'),
                 union_threshold=self.get_value('union_threshold'),
                 min_area=self.get_value('min_area'),
-                device=self.device
-            )
+                device=self.device)
         return self._tree_2d
 
     @property
@@ -348,7 +349,9 @@ class Tree2DGUI:
         self.show_masks()
 
     def make_show_tree_2d_mask_level(self):
+
         def show_level_callback(level):
+
             def wrapper():
                 self.set_level(level)
 
@@ -377,13 +380,13 @@ class Tree2DGUI:
 
     def make_control(self):
         with dpg.file_dialog(
-            directory_selector=True,
-            show=False,
-            callback=self.change_image_dir,
-            id="file_dialog_id",
-            width=700,
-            height=400,
-            default_path='/home/wan/Pictures',
+                directory_selector=True,
+                show=False,
+                callback=self.change_image_dir,
+                id="file_dialog_id",
+                width=700,
+                height=400,
+                default_path='/home/wan/Pictures',
         ):
             dpg.add_file_extension("Image{.png,.jpg}", custom_text='[Image]')
         with dpg.group(horizontal=True):
@@ -396,11 +399,7 @@ class Tree2DGUI:
             dpg.add_button(label='save', callback=self.save_result)
             dpg.add_button(label='load', callback=self.load_result)
             dpg.add_text('alpha')
-            dpg.add_slider_float(min_value=0,
-                max_value=1.,
-                default_value=0.5,
-                tag='alpha',
-                callback=self.update_viewer)
+            dpg.add_slider_float(min_value=0, max_value=1., default_value=0.5, tag='alpha', callback=self.update_viewer)
 
         with dpg.group(horizontal=True):
             dpg.add_text('Threshold: iou=')
@@ -450,6 +449,7 @@ class Tree2DGUI:
             dpg.add_button(width=W, height=H, label='Rebuild', callback=self.rebuild_tree)
 
         def changed_callback(item):
+
             def changed(*args):
                 if self._predictor is not None:
                     setattr(self._predictor, item, dpg.get_value(item))
@@ -569,9 +569,7 @@ class Tree2DGUI:
         if len(self._refine_points) == 0:
             return
         points = np.array(self._refine_points, dtype=np.float64)
-        masks, ious, _ = self.predictor.predict(points[:, :2],
-            points[:, 2].astype(np.int32),
-            multimask_output=False)
+        masks, ious, _ = self.predictor.predict(points[:, :2], points[:, 2].astype(np.int32), multimask_output=False)
         self._refine_mask = (torch.from_numpy(masks).to(self.tree2d.device), float(ious[0]))
         print(utils.show_shape(self._refine_mask))
         self.show_masks()

@@ -12,6 +12,9 @@ https://www.overleaf.com/6945515643cnsqpwznzgsq
 conda env create -f enviroment.yaml
 pip install git+https://github.com/NVlabs/nvdiffrast
 conda activate tree_seg
+
+cd semantic_sam/ops
+bash ./build.sh
 ```
 
 ## Download pretrained weights
@@ -28,10 +31,21 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 ## TODO
 
 - [x] [2D] add post propocess
+- [x] [3D] Tree3Dv2 to tree
+- [x] [3D] 添加tree loss
+
+### 8.3 work list 
+- [x] [2D] 修改metric, 在SA-1B上测试metric结果
+- [ ] [3D] 修改3D loss, 增加有关G重建的loss
+
+### 8.4 work list
+- [ ] [2D] 基于SA-1B选取超参数
+- [ ] [Paper] 制作PPT
+- [ ] [Paper] 撰写论文的方法部分
+
+### future
 - [ ] [2D] metric set ignore nodes
 - [ ] [2D] run experiment on PASCAL VOC/Cityscapes
-- [x] [3D] Tree3Dv2 to tree
-- [ ] [3D] 添加tree loss
 - [ ] [3D] 快速2D分割
 - [ ] [3D] 基于边的融合方法
 - [ ] [3D] add post-propocess
@@ -40,4 +54,8 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [ ] [GUI] Edit 2D: 右键单击显示上一层和下一层
 - [ ] [GUI] 合并save和load, 增加删除按钮
 - [ ] [3D] Tree3Dv2._get_masks 使用CUDA实现
-- [ ] [paper] start write
+- [ ] [Paper] 撰写实验部分
+- [ ] [Paper] 撰写相关工作
+- [ ] [Paper] 撰写Introduction
+- [ ] [Paper] 补充材料
+- [ ] [Paper] Demo视频

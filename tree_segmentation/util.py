@@ -9,7 +9,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from tree_segmentation import TreeData, MaskData, Tree3Dv2, Tree3D
+from tree_segmentation import Tree2D, MaskData, Tree3Dv2, Tree3D
 from tree_segmentation.extension import utils
 
 __all__ = [
@@ -36,7 +36,7 @@ def get_colored_masks(*masks):
         masks = masks[0]
     all_masks = []
     for mask in masks:
-        if isinstance(mask, (TreeData, MaskData)):
+        if isinstance(mask, (Tree2D, MaskData)):
             mask = mask['masks']
         elif isinstance(mask, dict):
             mask = mask['segmentation']
@@ -101,8 +101,8 @@ def image_add_mask_boundary(image: np.ndarray, mask: Tensor, color=(1., 0, 0)):
     return image
 
 
-def show_all_levels(image, tree: Union[Tree3D, Tree3Dv2, TreeData], tri_id=None, dpi=None, width=5., alpha=0.3, **kwargs):
-    if isinstance(tree, TreeData):
+def show_all_levels(image, tree: Union[Tree3D, Tree3Dv2, Tree2D], tri_id=None, dpi=None, width=5., alpha=0.3, **kwargs):
+    if isinstance(tree, Tree2D):
         levels = tree.get_levels()
         aux_data = None
     else:
@@ -128,13 +128,13 @@ def show_all_levels(image, tree: Union[Tree3D, Tree3Dv2, TreeData], tri_id=None,
             continue
         # print(f"level [{level}]: {nodes.tolist()}")
         plt.subplot(num_level, 2, level * 2 - 1)
-        if isinstance(tree, TreeData):
+        if isinstance(tree, Tree2D):
             show_masks(image, tree.masks[nodes - 1], alpha=alpha)
         else:
             show_masks(image, [aux_data[i.item()][0] for i in nodes], alpha=alpha)
         plt.title(f"level={level}")
         plt.subplot(num_level, 2, level * 2)
-        if isinstance(tree, TreeData):
+        if isinstance(tree, Tree2D):
             show_masks(None, tree.masks[nodes - 1])
         else:
             show_masks(None, [aux_data[i.item()][0] for i in nodes])

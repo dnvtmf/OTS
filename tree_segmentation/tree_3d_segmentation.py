@@ -8,11 +8,12 @@ import torch
 from torch import nn, Tensor
 import torch.nn.functional as F
 from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
+from torch_scatter import scatter
 
 from scipy.optimize import linear_sum_assignment
 from tree_segmentation.extension import Mesh, utils
 from tree_segmentation.extension import ops_3d
-from tree_segmentation import TreeStructure, MaskData, TreeData, extension as ext
+from tree_segmentation import TreeStructure, MaskData, Tree2D, extension as ext
 
 
 class Tree3D(TreeStructure):
@@ -682,7 +683,7 @@ class Tree3Dv2(TreeStructure):
             v_faces, v_cnts = tri_id.unique(return_counts=True)
             if v_faces[0] == 0:
                 v_faces, v_cnts = v_faces[1:], v_cnts[1:]
-            tree2d = TreeData(device=self.device)
+            tree2d = Tree2D(device=self.device)
             tree2d.load(None, **data[vid]['tree_data'])
             tree2d.remove_background(tri_id.eq(0), background_threshold)
             # tree2d.compress()
@@ -1090,7 +1091,8 @@ class Tree3Dv2(TreeStructure):
 
     def _get_masks(self, P: Tensor, eps=1e-7):
         # P shape: [K, M]
-        weights = (P @ self.masks_view[self.indices_view].float()).clamp_min(eps)
+        weights = scatter(P, self.indices_view.long(), dim=1, dim_size=self.V, reduce='sum')
+        weights = (weights @ self.masks_view.float()).clamp_min(eps)
         assert P.shape[1] == self.M
         if self._masks_2d_packed:
             masks = (P @ self._masks_2d_sp) / weights

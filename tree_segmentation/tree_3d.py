@@ -14,7 +14,7 @@ from tree_segmentation.extension import ops_3d
 from semantic_sam import SemanticSAM, semantic_sam_l
 import tree_segmentation as tree_segmentation
 from segment_anything.build_sam import Sam, build_sam
-from tree_segmentation import MaskData, TreeData, TreePredictor, Tree3D
+from tree_segmentation import MaskData, Tree2D, TreePredictor, Tree3D
 from tree_segmentation.render import render_mesh
 from tree_segmentation.util import get_hash_name
 
@@ -38,7 +38,7 @@ class TreeSegment:
         self._mesh: Optional[Mesh] = None
         self._predictor: Optional[TreePredictor] = None
 
-        self._tree_2d: Optional[TreeData] = None
+        self._tree_2d: Optional[Tree2D] = None
         self._2d_aux_data: Optional[Dict[Union[int, str], Tensor]] = None
         self._image: Optional[np.ndarray] = None
         self._points: Optional[np.ndarray] = None
@@ -112,9 +112,9 @@ class TreeSegment:
         self._points = points
 
     @property
-    def tree2d(self) -> TreeData:
+    def tree2d(self) -> Tree2D:
         if self._tree_2d is None:
-            self._tree_2d = TreeData(
+            self._tree_2d = Tree2D(
                 in_threshold=self.get_value('in_threshold'),
                 in_thres_area=self.get_value('in_area_threshold'),
                 union_threshold=self.get_value('union_threshold'),

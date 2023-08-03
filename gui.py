@@ -21,7 +21,7 @@ import tree_segmentation.tree_3d_segmentation as ts3
 from tree_segmentation.extension import utils
 from tree_segmentation.extension import ops_3d
 from tree_segmentation.extension.utils import ImageViewer, Viewer3D
-from tree_segmentation import Tree3D, Tree3Dv2, MaskData, TreeData
+from tree_segmentation import Tree3D, Tree3Dv2, MaskData, Tree2D
 from tree_segmentation.tree_3d import TreeSegment
 from tree_segmentation.util import color_mask, image_add_mask_boundary, image_add_points
 
@@ -212,16 +212,16 @@ class TreeSegmentGUI(TreeSegment):
         return self._tree_3d
 
     @property
-    def tree2d(self) -> TreeData:
+    def tree2d(self) -> Tree2D:
         if self._tree_2d is None:
-            self._tree_2d = tree_segmentation.TreeData(
+            self._tree_2d = tree_segmentation.Tree2D(
                 in_threshold=dpg.get_value('in_threshold'),
                 in_thres_area=dpg.get_value('in_area_threshold'),
                 union_threshold=dpg.get_value('union_threshold'),
                 min_area=dpg.get_value('min_area'),
                 device=self.device,
                 verbose=1,
-            )  # type: TreeData
+            )  # type: Tree2D
         if self._tree_2d.data is None and self.tri_id is not None:
             background = self.tri_id == 0
             foreground = torch.logical_not(background)

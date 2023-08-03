@@ -212,7 +212,7 @@ class TreeStructure:
         return self
 
 
-class TreeData(TreeStructure):
+class Tree2D(TreeStructure):
 
     def __init__(
         self,
@@ -329,7 +329,8 @@ class TreeData(TreeStructure):
             else:  # no intersect
                 pass
         if len(nodes_union) > 0:
-            print(f"[Tree2D] {i} union with {nodes_union}")
+            if self.verbose > 0:
+                print(f"[Tree2D] {i} union with {nodes_union}")
             return
         # assert len(nodes_union) == 0, f"{i} union with {nodes_union}"
         if self.verbose > 1:
