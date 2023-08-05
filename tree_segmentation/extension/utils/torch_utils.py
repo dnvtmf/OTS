@@ -305,8 +305,11 @@ def split_run(fn: T_fn, split_size=-1, **keep_kwargs) -> T_fn:
     return wrapper
 
 
-def sum_losses(loss_dict: dict) -> Tensor:
+def sum_losses(loss_dict: dict, weights:dict=None) -> Tensor:
+    if weights is None:
+        weights = {}
     total = 0
     for k, v in loss_dict.items():
-        total = v + total
+        total = v * weights.get(k, 1.) + total
     return total
+ 

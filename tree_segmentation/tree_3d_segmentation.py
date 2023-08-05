@@ -763,7 +763,7 @@ class Tree3Dv2(TreeStructure):
         num_masks = []
         self.range_view = []
         self.view_infos = []
-        self.masks_view = torch.zeros((self.V, gt_tree.num_faces + 1), dtype=torch.float, device=self.device)
+        self.masks_view = torch.zeros((self.V, gt_tree.num_faces + 1), dtype=torch.bool, device=self.device)
         temp = torch.zeros(gt_tree.num_faces + 1, device=self.device)
 
         for vid in range(self.V):
@@ -1004,25 +1004,28 @@ class Tree3Dv2(TreeStructure):
 
     # 相连的边的特征相似
     def loss_edge_similarity(self, S: Tensor):
-        S = F.normalize(S, dim=1)  # shape: [N, C]
-        sim = S @ S.T
+        S = F.normalize(S, dim=1)  # shape: [K,N]
+        sim = S.T @ S  # shape: [N, N]
         return F.mse_loss(sim, self.A)
 
-    def loss_recon(self, P: Tensor, Masks: Tensor = None, k1=-1, k2=-1, eps=1e-7):
-        if Masks is None:
-            Masks = (P.T @ self.masks_2d) / (P.T @ self.masks_view[self.indices_view]).clamp_min(eps)
-        if k1 < 0:
-            k1 = torch.randint(0, self.V, (1,)).item()
-        if k2 < 0:
-            k2 = torch.randint(0, self.V, (1,)).item()
+    def loss_recon(self, P: Tensor, masks: Tensor, k1=-1, k2=-1, eps=1e-7):
+        # if k1 < 0:
+        #     k1 = torch.randint(0, self.V, (1,)).item()
+        # if k2 < 0:
+        #     k2 = torch.randint(0, self.V, (1,)).item()
+        assert self.view_G is not None
+        indices = torch.nonzero(self.view_G)
+        # print(utils.show_shape(P, indices))
+        k1, k2 = indices[torch.randint(0, len(indices), (1,), dtype=torch.long, device=indices.device).item()]
         assert 0 <= k1 < self.V and 0 <= k2 < self.V
-        view_mask = self.masks_view[k1].gt(0) * self.masks_view[k2].gt(0)
+        # print(self.masks_view.shape)
+        view_mask = self.masks_view[k1] * self.masks_view[k2]
         view_mask[0] = 0
         # print('[Tree3D]', 'view_mask:', utils.show_shape(view_mask))
         if view_mask.sum() == 0:
             return torch.zeros(1, device=self.device)
         # print('[Tree3D]', *Masks.aminmax())
-        masks_ = Masks[:, view_mask] * self.area[view_mask[1:]]
+        masks_ = masks[:, view_mask] * self.area[view_mask[1:]]
         # print('[Tree3D]', 'masks_', utils.show_shape(masks_), *mesh_area.aminmax())
         inter_ = F.linear(masks_, masks_)
         area = masks_.sum(dim=-1)
@@ -1032,8 +1035,8 @@ class Tree3Dv2(TreeStructure):
         # print('[Tree3D]', IoU.shape)
         id_1 = torch.nonzero(self.indices_view.eq(k1))[:, 0]
         id_2 = torch.nonzero(self.indices_view.eq(k2))[:, 0]
-        # print('[Tree3D]', utils.show_shape(id_1, id_2))
-        predictions = (P[id_1, None, :, None] * P[None, id_2, None, :] * IoU).sum(dim=[2, 3])
+        # print('[Tree3D]', utils.show_shape(P[:, id_1], P[:, id_2]))
+        predictions = (P[:, id_1].T @ IoU @ P[:, id_2])
         # print('[Tree3D]', (P[id_1, None, :, None] * P[None, id_2, None, :]).sum(dim=[2, 3]))
         # print('[Tree3D]', 'predictions', utils.show_shape(predictions))
         gt_index = torch.meshgrid(id_1, id_2, indexing='ij')
@@ -1120,6 +1123,14 @@ class Tree3Dv2(TreeStructure):
         masks = self._get_masks(P)  # [K, F+1]
         if timer is not None:
             timer.log('get masks')
+
+        # graph similarity
+        losses['es'] = self.loss_edge_similarity(P)
+        if timer is not None:
+            timer.log('edge_sim')
+        losses['recon'] = self.loss_recon(P, masks, eps=eps)
+        if timer is not None:
+            timer.log('recon')
         # 评估Masks投影到当前view后的masks与当前view检测出的结果之间的差别
         s, e = self.range_view[view_index]
         P = P[:, s:e]
@@ -1170,7 +1181,15 @@ class Tree3Dv2(TreeStructure):
         # assert not any(torch.isnan(x) for x in losses.values()), losses
         return losses
 
-    def run(self, epochs=10000, N_view=-1, K=0, gnn: nn.Module = None, A: Tensor = None, X: Tensor = None, topP=False):
+    def run(self,
+            epochs=10000,
+            N_view=-1,
+            K=0,
+            gnn: nn.Module = None,
+            A: Tensor = None,
+            X: Tensor = None,
+            topP=False,
+            weights: dict = None):
         # torch.cuda.empty_cache()
         torch.set_anomaly_enabled(True)
         # print('[Tree3D] GPU:', utils.get_GPU_memory())
@@ -1224,10 +1243,10 @@ class Tree3Dv2(TreeStructure):
                     progress=epoch / epochs if topP else 1.,
                     timer=timer,
                 )
-                total_loss = utils.sum_losses(loss_dict)
+                total_loss = utils.sum_losses(loss_dict, weights)
                 meter.update(loss_dict)
                 total_loss.backward()
-                timer.log('background')
+                timer.log('backward')
 
                 # print(prof.key_averages().table(sort_by="self_cuda_time_total"))
                 opt.step()

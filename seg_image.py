@@ -19,16 +19,14 @@ def options():
     parser.add_argument('-ssl', '--semantic-sam-l', action='store_true', default=False)
     parser.add_argument('-sst', '--semantic-sam-t', action='store_true', default=False)
     parser.add_argument(
-        '-w', '--weights', default='./weights', help='The directory stored pretrained model of SAM/Semantic-SAM'
-    )
+        '-w', '--weights', default='./weights', help='The directory stored pretrained model of SAM/Semantic-SAM')
     parser.add_argument('-o', '--output', default='.', help='The directory of output')
     parser.add_argument(
         '-f',
         '--format',
         default='.png',
         choices=['.png', '.tiff', '.tree2d'],
-        help='The format of output results, choose in ].png, .tiff, .tree2d]'
-    )
+        help='The format of output results, choose in ].png, .tiff, .tree2d]')
     # preditor
     parser.add_argument('--pred_iou_thresh', default=0.88, type=float)
     parser.add_argument('--stability_score_thresh', default=0.95, type=float)
@@ -85,8 +83,7 @@ def main():
         pred_iou_thresh=args.pred_iou_thresh,
         stability_score_thresh=args.stability_score_thresh,
         box_nms_thresh=args.box_nms_thresh,
-        image_size=args.image_size
-    )
+        image_size=args.image_size)
     print('build predictor')
 
     results = predictor.generate(
@@ -94,12 +91,11 @@ def main():
         points_per_side=args.points_per_side,
         points_per_update=args.points_per_update,
         min_mask_region_area=args.min_area,
-        max_iters=args.max_steps,
+        max_steps=args.max_steps,
         in_threshold=args.in_threshold,
         in_thre_area=args.in_area_threshold,
         union_threshold=args.union_threshold,
-        device=device
-    )
+        device=device)
     results.post_process()
     results.print_tree()
 

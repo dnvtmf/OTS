@@ -37,12 +37,13 @@ class TreeSegmentMetric:
                return_match=False):
         if type(gt).__name__.startswith('Tree3D'):
             IoU, indices_pd, indices_gt = self.calc_IoU_3d(prediction, gt)
-        elif isinstance(gt, Tree2D):
+        elif type(gt).__name__ == 'Tree2D':  # isinstance(gt, Tree2D):
             IoU, indices_pd, indices_gt = self.calc_IoU_2d(prediction, gt)
         else:
             raise NotImplementedError(f"prediction: {prediction.__class__.__name__}, gt: {gt.__class__.__name__}")
         N, M = IoU.shape
         TS = self.calc_tree_structure_score(prediction, indices_pd)
+        assert 0 <= TS.min() and TS.max() <= 1. + 1e-4, f"{TS.aminmax()}"
         # get TQ
         matched_iou, matched = IoU.max(dim=1)
         iou_ = torch.zeros_like(IoU)
@@ -169,14 +170,14 @@ class TreeSegmentMetric:
             order = torch.argsort(p.scores[indices], descending=True)  # sorted by score
             indices = indices[order]
         M = len(indices)
-        if isinstance(p, Tree2D):
-            masks = p.masks[indices].flatten(1).float()
-            areas = masks.sum(dim=1)
-            inter = F.linear(masks, masks)
-        else:
+        if hasattr(p, 'area'):
             masks = p.masks[indices, 1:].float()
             areas = torch.mv(masks, p.area)
             inter = F.linear(masks, masks * p.area)
+        else:
+            masks = p.masks[indices].flatten(1).float()
+            areas = masks.sum(dim=1)
+            inter = F.linear(masks, masks)
         IoU = inter / (areas[:, None] + areas[None, :] - inter).clamp_min(self.eps)
         In = inter / (areas[:, None]).clamp_min(self.eps)
 
@@ -304,12 +305,12 @@ class TreeSegmentMetric:
             'SQ': self.SQ,
             'RQ': self.RQ,
             'PQ': self.PQ,
-            'TQ': self.TQ,
             'TS': self.TS,
+            'TQ': self.TQ,
             'mSQ': self.mSQ,
             'mRQ': self.mRQ,
             'mPQ': self.mPQ,
-            'mTQ': self.mTQ,
             'mTS': self.mTS,
+            'mTQ': self.mTQ,
             'mIoU': self.mIoU,
         }

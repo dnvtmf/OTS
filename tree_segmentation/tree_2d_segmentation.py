@@ -3,7 +3,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from torch import Tensor
-from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
+import torch.nn.functional as F
 
 from segment_anything.utils.amg import (
     MaskData,
@@ -216,7 +216,8 @@ class Tree2D(TreeStructure):
 
     def __init__(
         self,
-        mask_data: MaskData = None,
+        masks: Union[MaskData, Tensor, 'Tree2D'] = None,
+        scores: Tensor = None,
         in_threshold=0.9,
         union_threshold=0.1,
         min_area=100,
@@ -225,103 +226,162 @@ class Tree2D(TreeStructure):
         verbose=0,
     ) -> None:
         self._is_compressed = False
-        self.data = self._fileter(mask_data)
         self.in_threshold = in_threshold
         self.in_thres_area = in_thres_area
         self.union_threshold = union_threshold
         # self.min_area_rate = min_area_rate
         self.min_area = min_area  # self['masks'][0].numel() * self.min_area_rate
-        num = 0 if self.data is None else len(self.data['masks'])
-        if self.data is not None:
-            self.data['area'] = self.data['masks'].sum(dim=[-1, -2])
-        super().__init__(num + 1, device, verbose)
+
+        self._masks: Optional[Tensor]
+        if isinstance(masks, MaskData):
+            self._masks, self.scores = masks['masks'], masks['iou_preds']
+        elif isinstance(masks, Tensor):
+            self._masks = masks
+            self.scores = torch.ones(self._masks.shape[0], device=device) if scores is None else scores
+        elif isinstance(masks, Tree2D):
+            self._masks, self.scores = masks.masks, masks.scores
+        else:
+            self._masks, self.scores = None, torch.ones(0, device=device)
+        if device is not None:
+            if self._masks is not None:
+                self._masks = self._masks.to(device)
+            self.scores = self.scores.to(device)
+        num = self.scores.shape[0]
+        if self._masks is not None:
+            self._areas = self._masks.sum(dim=(1, 2))
+            assert self._masks.shape[0] == self.scores.shape[0]
         self.num_samples = torch.zeros(num + 1, dtype=torch.int, device=device)
+        super().__init__(num + 1, device, verbose)
 
     @property
     def num_masks(self) -> int:
-        return self.num_samples.shape[0] - 1
+        return self.scores.shape[0]
 
     @property
     def is_compressed(self):
         return self._is_compressed
 
-    def _fileter(self, data: MaskData = None):
-        if data is None:
-            return data
-        else:
-            return MaskData(masks=data['masks'], iou_preds=data['iou_preds'])
+    @property
+    def areas(self) -> Optional[Tensor]:
+        if self._areas is None:
+            self._areas = self._uncompress().sum(dim=(1, 2))
+        return self._areas
 
-    def reset(self, mask_data: MaskData = None):
-        mask_data = self._fileter(mask_data)
+    def clear(self, masks: Union[MaskData, Tensor] = None, scores: Tensor = None):
         if self.verbose > 0:
-            print('[Tree2D] Reset TreeData')
-        if mask_data is not None:  # and 'area' not in mask_data
-            mask_data['area'] = mask_data['masks'].sum(dim=[-1, -2])
-            self.data = mask_data
-        self.uncompress()
-        num = 0 if self.data is None else len(self.data['masks'])
+            print('[Tree2D] clear TreeData')
+        if isinstance(masks, MaskData):
+            self._masks, self.scores = masks['masks'], masks['iou_preds']
+        elif isinstance(masks, Tensor):
+            self._masks = masks
+            self.scores = torch.ones(self._masks.shape[0], device=self.device) if scores is None else scores
+        elif isinstance(masks, Tree2D):
+            self._masks, self.scores = masks.masks, masks.scores
+        else:
+            self._masks, self.scores = None, torch.ones(0, device=self.device)
+        if self._masks is not None:
+            self._masks = self._masks.to(self.device)
+        self.scores = self.scores.to(self.device)
+        self._areas = None
+        num = self.scores.shape[0]
         self.parent = torch.full((num + 1,), -1, dtype=torch.int, device=self.device)  # 父节点
         self.first = torch.full((num + 1,), -1, dtype=torch.int, device=self.device)  # 第一个子节点
         self.last = torch.full((num + 1,), -1, dtype=torch.int, device=self.device)  # 同级别前一个节点
         self.next = torch.full((num + 1,), -1, dtype=torch.int, device=self.device)  # 同级别后一个节点
         self.num_samples = torch.zeros((num + 1,), dtype=torch.int, device=self.device)
-        self.cnt = 0
+        self.reset()
 
     def resize(self, N: int):
+        self.uncompress()
         N, M = super().resize(N)
         if M > N:
+            self.scores = self.scores[:N - 1]
+            if self._masks is not None:
+                self._masks = self._masks[:N - 1]
+            if self._areas is not None:
+                self._areas = self._areas[:N - 1]
             self.num_samples = self.num_samples[:N]
         elif M < N:
-            self.num_samples = torch.cat([self.num_samples, self.num_samples.new_full((N - M,), 0)])
+            self.scores = F.pad(self.scores, [0, N - M], value=0)
+            if self._masks is not None:
+                self._masks = F.pad(self._masks, [0, 0, 0, 0, 0, N - M], value=0)
+            if self._areas is not None:
+                self._areas = F.pad(self._areas, [0, N - M], value=0)
+            self.num_samples = F.pad(self.num_samples, [0, N - M], value=0)
 
-    def node_new(self):
-        index = super().node_new()
-        self.num_samples[index] = 0
+    def new_node(self, mask: Tensor, score=1, area=None):
+        if area is None:
+            area = mask.sum()
+        self.resize(self.num_masks + 2)
+        if self._masks is None:
+            self._masks = mask[None, :].clone()
+        else:
+            self._masks[-1] = mask
+        self.scores[-1] = score
+        if self._areas is not None:
+            self._areas[-1] = area
+        index = self.node_new()
         return index
 
-    def node_replace(self, idx: int, old: int):
-        super().node_replace(idx, old)
-        self.num_samples[idx] = self.num_samples[old]
-
     def node_rearrange(self, indices=None):
+        if indices is not None:
+            assert 0 <= indices.min() and indices.max() <= self.cnt
         self.uncompress()
-        indices, _ = super().node_rearrange(indices)
+        indices, new_indices = super().node_rearrange(indices)
         self.num_samples[:len(indices)] = self.num_samples[indices]
+        idx_ = indices[indices != 0] - 1
+        assert 0 <= idx_.min() and idx_.max() < len(self._masks)
+        assert len(self._masks) == len(self.scores)
+        self._masks = self._masks[idx_]
+        self.scores = self.scores[idx_]
+        if self._areas is not None:
+            self._areas = self._areas[idx_]
+        return indices, new_indices
 
-    def insert(self, i, now=0):
-        area_i = self.data['area'][i - 1]
-        if area_i < self.min_area:
+    def insert(self, mask: Tensor, score=1, area=None, i: int = None, now=0) -> int:
+        self.uncompress()
+        if area is None:
+            area = mask.sum()
+        if area < self.min_area:
             if self.verbose > 1:
-                print(f'[Tree2D] ingore {i} due to small area {area_i.item()} vs {self.min_area}')
-            return
-        # print('=' * 10, i, now, f"area={area_i}", '=' * 10)
-        mask_i = self.data['masks'][i - 1]
+                print(f'[Tree2D] ingore insert due to small area {area.item()} vs {self.min_area}')
+            return -1
+        # print('=' * 10, i, now, f"area={area}", '=' * 10)
         # bbox_i = self['bbox'][i - 1]
         nodes_in_i = []
         nodes_union = []
         for j in self.get_children(now):
-            mask_j = self.data['masks'][j - 1]
-            area_j = self.data['area'][j - 1]
-            inter = torch.logical_and(mask_i, mask_j).sum()
-            union = area_i + area_j - inter
-            if inter / area_i >= self.in_threshold or area_i - inter < self.in_thres_area:  # i in j
+            mask_j = self._masks[j - 1]
+            area_j = self.areas[j - 1]
+            inter = torch.logical_and(mask, mask_j).sum()
+            union = area + area_j - inter
+            if inter / area >= self.in_threshold or area - inter < self.in_thres_area:  # i in j
                 if inter / area_j >= self.in_threshold or area_j - inter < self.in_thres_area:  # i == j
                     # print(f"{i} same {j}: area:{area_i}/{area_j},inter={inter}/{inter/area_i:.2%}/{inter/area_j:.2%}")
                     # print(f'inter area: {area_i - inter}/{area_j-inter} < {self.in_thres_area}')
-                    if self.data['iou_preds'][i - 1] > self.data['iou_preds'][j - 1]:
-                        self.node_replace(i, j)
+                    if score > self.scores[j - 1]:
+                        if i is None:
+                            self.scores[j - 1] = score
+                            self.masks[j - 1] = mask
+                            self.areas[j - 1] = area
+                        else:
+                            self.node_replace(i, j)
+                        if self.verbose > 1:
+                            print(f'[Tree2D] insert {i} replace {j}')
                     else:
                         if self.verbose > 1:
-                            print(f'[Tree2D] {i} is same with {j}, skip')
-                    return
+                            print(f'[Tree2D] insert {i} is same with {j}, skip')
+                    return j
                 if self.verbose > 1:
-                    print(f'[Tree2D] {i} in {j}, {inter.item() / area_i.item():.2%}')
+                    print(f'[Tree2D] insert in {j}, {inter.item() / area.item():.2%}')
                 if self.first[j] < 0:
+                    if i is None:
+                        i = self.new_node(mask, score, area)
                     self.node_insert(i, j)
                     self.num_samples[i] = self.num_samples[i] * 0.5
+                    return i
                 else:
-                    self.insert(i, j)
-                return
+                    return self.insert(mask, score, area, i, j)
             elif inter / area_j >= self.in_threshold:  # j in i
                 nodes_in_i.append(j)
             elif inter / union > self.union_threshold:
@@ -331,10 +391,12 @@ class Tree2D(TreeStructure):
         if len(nodes_union) > 0:
             if self.verbose > 0:
                 print(f"[Tree2D] {i} union with {nodes_union}")
-            return
+            return -1
+        if i is None:
+            i = self.new_node(mask, score, area)
         # assert len(nodes_union) == 0, f"{i} union with {nodes_union}"
         if self.verbose > 1:
-            print(f"[Tree2D] {i} in {now} before {self.first[now].item()}", nodes_in_i)
+            print(f"[Tree2D] insert {i} in {now} before {self.first[now].item()}", nodes_in_i)
         self.node_insert(i, now)
         self.num_samples[i] = self.num_samples[i] * 0.5
         if len(nodes_in_i) > 0:
@@ -342,32 +404,79 @@ class Tree2D(TreeStructure):
                 self.node_move(j, i)
                 if self.verbose > 2:
                     print(f"[Tree2D] move {j} from {now} to {i}")
+        return i
+
+    def insert_batch(self, masks: Union[MaskData, 'Tree2D', Tensor], scores=None):
+        self.uncompress()
+        if isinstance(masks, MaskData):
+            masks, scores = masks['masks'], masks['iou_preds']
+        elif isinstance(masks, Tree2D):
+            masks, scores = masks.masks, masks.scores
+        elif scores is None:
+            scores = torch.ones(masks.shape[0], device=masks.device)
+        num_ignored = 0
+        for i in range(len(masks)):
+            if self.insert(masks[i], scores[i]) < 0:
+                num_ignored += 1
+        if self.verbose > 0:
+            print(f'[Tree2D] Try to insert {len(masks)} masks, {num_ignored} are ignored')
+        return num_ignored
+
+    def cat(self, masks: Union[MaskData, 'Tree2D', Tensor], scores=None):
+        self.uncompress()
+        if isinstance(masks, MaskData):
+            masks, scores = masks['masks'], masks['iou_preds']
+        elif isinstance(masks, Tree2D):
+            masks, scores = masks.masks, masks.scores
+        elif scores is None:
+            scores = torch.ones(masks.shape[0], device=masks.device)
+        assert masks.ndim == 3
+        N = len(masks)
+        self.resize(len(self.scores) + N + 1)
+        masks, scores = masks.to(self.device), scores.to(self.device)
+        if self._masks is None:
+            self._masks = masks
+        else:
+            self._masks[-N:] = masks
+        if self._areas is not None:
+            self._areas[-N:] = masks.sum(dim=(1, 2))
+        self.scores[-N:] = scores
+        if self.verbose > 0:
+            print(f'[Tree2D] cat {len(masks)} masks')
+        return self
 
     def update_tree(self):
+        """insert undealed masks"""
+        if self._masks is None:
+            return
         self.uncompress()
-        while self.cnt < len(self.data['masks']):
-            self.insert(self.node_new())  # self.print_tree()
+        num_ignored = 0
+        while self.cnt < len(self._masks):
+            i = self.node_new()
+            if self.insert(self._masks[i - 1], self.scores[i - 1], self.areas[i - 1], i) < 0:
+                num_ignored += 1
+        return num_ignored
 
     def sample_grid(self, points_per_side=32):
         return build_point_grid(points_per_side)
 
     @torch.no_grad()
     def sample_unfilled(self, num_points=1024, threshold=0.9) -> Tuple[Optional[np.ndarray], Optional[Tensor]]:
-        if self.data is None:
+        if self._masks is None:
             return np.random.random((num_points, 2)), None
         self.uncompress()
-        N, H, W = self.data['masks'].shape
+        N, H, W = self._masks.shape
         level = 0
         for level, nodes in enumerate(self.get_levels()):
             if level == 0:
                 continue
             assert 0 < nodes.min() and nodes.max() <= N
-            area_sum = self.data['area'][nodes - 1].sum()
+            area_sum = self.areas[nodes - 1].sum()
             # par_nodes = set(self.parent[i] for i in nodes)
             par_nodes = torch.unique(self.parent[nodes])
             assert -1 <= par_nodes.min() and par_nodes.max() <= N
             # area_total = sum(self['area'][i - 1] for i in par_nodes if i > 0) if level else H * W
-            area_total = self.data['area'][par_nodes - 1].sum() if level > 1 else H * W
+            area_total = self.areas[par_nodes - 1].sum() if level > 1 else H * W
             # print('level:', level, nodes, par_nodes, area_sum, area_total)
             if area_sum / area_total >= threshold:
                 print(f'[Tree2D] level {level} are fillded, rate: {area_sum / area_total:.2%}')
@@ -376,10 +485,10 @@ class Tree2D(TreeStructure):
             # print([self['masks'][i - 1] for i in par_nodes if i > 0])
             # print(torch.stack([self['masks'][i - 1] for i in par_nodes if i > 0], dim=0).shape)
             if level == 1:
-                wanted_mask = torch.ones_like(self.data['masks'][0])
+                wanted_mask = torch.ones_like(self._masks[0])
             else:
-                wanted_mask = self.data['masks'][par_nodes - 1].any(dim=0)
-            filled_mask = self.data['masks'][nodes - 1].any(dim=0)
+                wanted_mask = self._masks[par_nodes - 1].any(dim=0)
+            filled_mask = self._masks[nodes - 1].any(dim=0)
             unfilled_mask = torch.logical_and(wanted_mask, ~filled_mask)
             xy = torch.nonzero(unfilled_mask).flip(-1)
             sample_index = torch.randint(0, xy.shape[0], (num_points,))
@@ -389,12 +498,12 @@ class Tree2D(TreeStructure):
             sample_points = sample_points / sample_points.new_tensor([W, H])
             return sample_points.cpu().numpy(), unfilled_mask
         if self.verbose > 0:
-            print(f'New level {level + 1}')
-        unfilled_mask = torch.ones_like(self.data['masks'][0])
+            print(f'[Tree2D] New level {level + 1}')
+        unfilled_mask = torch.ones_like(self._masks[0])
         return np.random.random((num_points, 2)), unfilled_mask
 
     @torch.no_grad()
-    def sample_by_counts(self, num_points=1024, sample_limit_fn=None) -> Optional[np.ndarray]:
+    def sample_by_counts(self, num_points=1024, sample_limit_fn=None, noise=1.0) -> Optional[np.ndarray]:
         """当某一mask的采样的点的数量 < sample_limit_fn(area) 时, 从该mask中采样点"""
         if self.first[0] <= 0:
             return np.random.random((num_points, 2))
@@ -402,13 +511,12 @@ class Tree2D(TreeStructure):
 
         if sample_limit_fn is None:  # 默认采样点数限制函数: 面积的平方根
             sample_limit_fn = lambda area: np.sqrt(area.item())
-
         indices = self.get_sample_indices(sample_limit_fn, 0)
         if len(indices) == 0:
             return None
-        sample_mask = torch.zeros_like(self.data['masks'][0], dtype=torch.int)
+        sample_mask = torch.zeros_like(self._masks[0], dtype=torch.int)
         for index in indices:
-            sample_mask[self.data['masks'][index - 1]] = index
+            sample_mask[self._masks[index - 1]] = index
         H, W = sample_mask.shape
         xy = torch.nonzero(sample_mask).flip(-1)
         sample_index = torch.randint(0, xy.shape[0], (num_points,))
@@ -417,45 +525,45 @@ class Tree2D(TreeStructure):
         indices, counts = indices.unique(return_counts=True)
         self.num_samples[indices] += counts
         sample_points = sample_points.float()
-        sample_points = sample_points + torch.randn_like(sample_points) * 1.0  # 随机噪声
+        sample_points = sample_points + torch.randn_like(sample_points) * noise  # 随机噪声
         sample_points = sample_points / sample_points.new_tensor([W, H])
-        return sample_points.cpu().numpy()
-
-    @torch.no_grad()
-    def sample_each_mask(self, num_point_per_mask=1) -> np.ndarray:
-        self.uncompress()
-        self.remove_not_in_tree()
-        points = []
-        _, H, W = self.data['masks'].shape
-        for i in range(self.cnt):
-            mask = self.data['masks'][i]
-            xy = torch.nonzero(mask).flip(-1)
-            indices = torch.randint(0, len(xy), (num_point_per_mask,), device=xy.device)
-            xy = xy[indices]
-            xy += torch.randn_like(xy) * 1.0
-            points.append(xy)
-        return torch.cat(points, dim=0).cpu().numpy() / np.array([W, H])
+        return sample_points.clamp(0, 1).cpu().numpy()
 
     def get_sample_indices(self, sample_limit_fn, root=0):
         sample_indices = []
         for child in self.get_children(root):
-            if self.num_samples[child] > sample_limit_fn(self.data['area'][child - 1]):
+            if self.num_samples[child] > sample_limit_fn(self.areas[child - 1]):
                 sample_indices.extend(self.get_sample_indices(sample_limit_fn, child))
             else:
                 sample_indices.append(child)
         return sample_indices
 
-    def cat(self, mask_data: MaskData) -> None:
+    @torch.no_grad()
+    def sample_each_mask(self, num_point_per_mask=1, noise=1.0) -> np.ndarray:
         self.uncompress()
-        mask_data = self._fileter(mask_data)
-        if self.verbose > 0:
-            print('[Tree2D] cat', (None if self.data is None else self.data['masks'].shape), mask_data['masks'].shape)
-        if self.data is None:
-            self.reset(mask_data)
-            return
-        mask_data['area'] = mask_data['masks'].sum(dim=[-1, -2])
-        self.data.cat(mask_data)
-        self.resize(self.data['masks'].shape[0] + 1)
+        self.remove_not_in_tree()
+        points = []
+        _, H, W = self._masks.shape
+        for i in range(self.num_masks):
+            mask = self._masks[i]
+            xy = torch.nonzero(mask).flip(-1)
+            indices = torch.randint(0, len(xy), (num_point_per_mask,), device=xy.device)
+            xy = xy[indices]
+            xy += torch.randn_like(xy) * noise
+            points.append(xy)
+        return np.clip(torch.cat(points, dim=0).cpu().numpy() / np.array([W, H]), 0, 1)
+
+    # def cat(self, mask_data: MaskData) -> None:
+    #     self.uncompress()
+    #     mask_data = self._fileter(mask_data)
+    #     if self.verbose > 0:
+    #         print('[Tree2D] cat', (None if self.data is None else self._masks.shape), mask_data['masks'].shape)
+    #     if self.data is None:
+    #         self.reset(mask_data)
+    #         return
+    #     mask_data['area'] = mask_data['masks'].sum(dim=[-1, -2])
+    #     self.data.cat(mask_data)
+    #     self.resize(self._masks.shape[0] + 1)
 
     # def apply_nms(self, box_nms_thresh=0.7):
     #     keep_by_nms = batched_nms(
@@ -470,10 +578,10 @@ class Tree2D(TreeStructure):
     #     self.reset(self.data)
     #     return keep_by_nms
 
-    def filter(self, keep) -> None:
-        self.uncompress()
-        self.data.filter(keep)
-        self.reset()
+    # def filter(self, keep) -> None:
+    #     self.uncompress()
+    #     self.data.filter(keep)
+    #     self.reset()
 
     def remove_not_in_tree(self):
         """remove duplicate after merge new results"""
@@ -482,13 +590,10 @@ class Tree2D(TreeStructure):
         self.uncompress()
         if self.cnt == 0:  # empty
             return
-        # if self.cnt == self.data['masks'].shape[0]:
-        #     return
         keep = torch.cat(self.get_levels(), dim=0)[1:].long()
-        assert 0 < keep.min() and keep.max() <= len(self.data['masks'])
-        self.data.filter(keep - 1)
+        assert 0 < keep.min() and keep.max() <= len(self._masks)
         self.node_rearrange()
-        self.resize(self.cnt + 1)  # self.print_tree()
+        self.resize(self.cnt + 1)
 
     def _dillate(self):
         """腐蚀边界, 直至无空隙"""
@@ -527,16 +632,17 @@ class Tree2D(TreeStructure):
         raise NotImplementedError
 
     def save(self, filename, **kwargs):
-        data = {} if self.data is None else {k: self._compress() if k == 'masks' else v for k, v in self.data.items()}
-        data.update({
+        data = {
             'parent': self.parent,
             'first': self.first,
             'next': self.next,
             'last': self.last,
             'cnt': self.cnt,
             'num_samples': self.num_samples,
+            'masks': self._compress(),
+            'scores': self.scores,
             'extra': kwargs
-        })
+        }
         if filename is not None:
             torch.save(data, filename)
             if self.verbose > 0:
@@ -551,9 +657,11 @@ class Tree2D(TreeStructure):
         self.next = data.pop('next')
         self.last = data.pop('last')
         self.cnt = data.pop('cnt')
+        self._masks = data.pop('masks')
+        self.scores = data.pop('scores')
+        self._areas = None
         self.num_samples = data.pop('num_samples')
         extra = data.pop('extra')
-        self.data = MaskData(**data) if len(data) > 0 else None
         self._is_compressed = True
         self.to(self.device)
         if self.verbose > 0:
@@ -562,9 +670,9 @@ class Tree2D(TreeStructure):
 
     def to(self, device):
         super().to(device)
-        for k, v in self.data.items():
-            if isinstance(v, Tensor):
-                self.data[k] = v.to(device)
+        self._masks = self._masks.to(device) if self._masks is not None else None
+        self.scores = self.scores.to(device)
+        self._areas = self._areas.to(device) if self._areas is not None else None
         return self
 
     def post_process(self, min_area=100):
@@ -581,15 +689,15 @@ class Tree2D(TreeStructure):
                 assert len(nodes) == 1 and nodes.item() == 0
                 continue
             assert nodes.min() > 0
-            order = torch.argsort(self.data['iou_preds'][nodes - 1], descending=False)
-            masks = self.data['masks'][nodes - 1]
+            order = torch.argsort(self.scores[nodes - 1], descending=False)
+            masks = self._masks[nodes - 1]
             for i in range(len(nodes)):
                 mask = masks[order[i]].cpu().numpy()
                 mask, changed = remove_small_regions(mask, min_area, mode="holes")
                 unchanged = unchanged and not changed
                 mask, changed = remove_small_regions(mask, min_area, mode="islands")
                 unchanged = unchanged and not changed
-                self.data['masks'][nodes[order[i]] - 1].copy_(torch.from_numpy(mask).to(masks))
+                self._masks[nodes[order[i]] - 1].copy_(torch.from_numpy(mask).to(masks))
         # re-build segmentation tree
         self.cnt = 0
         self.first[0] = -1
@@ -601,34 +709,35 @@ class Tree2D(TreeStructure):
 
     def _compress(self):
         if self.is_compressed:
-            return self.data['masks']
+            return self._masks
         masks = []
         for level, nodes in enumerate(self.get_levels()):
             if level == 0:
                 continue
-            mask = torch.zeros_like(self.data['masks'][0], dtype=torch.int)
+            mask = torch.zeros_like(self._masks[0], dtype=torch.int)
             for i in nodes:
-                mask[self.data['masks'][i - 1]] = i
+                mask[self._masks[i - 1]] = i
             masks.append(mask)
         return torch.stack(masks, dim=0)
 
     def compress(self):
         """save masks use multi-level tensor, all mask in same level do not intersection"""
         if self.is_compressed:
-            return
-        if self.data is None:
-            return
+            return self
+        if self._masks is None:
+            return self
         if self.verbose > 0:
             print(f"[Tree2D] Compress masks")
         self.remove_not_in_tree()
-        self.data['masks'] = self._compress()
+        self._masks = self._compress()
         self._is_compressed = True
+        return self
 
-    def _uncompress(self):
+    def _uncompress(self) -> Optional[Tensor]:
         # print('is_compressed:', self.is_compressed)
         if not self.is_compressed:
-            return self.data['masks']
-        masks = self.data['masks']
+            return self._masks
+        masks = self._masks
         assert masks.max() <= self.num_masks
         masks_u = torch.zeros((self.num_masks, *masks.shape[1:]), dtype=torch.bool, device=self.device)
         for level, nodes in enumerate(self.get_levels()):
@@ -641,39 +750,42 @@ class Tree2D(TreeStructure):
 
     def uncompress(self):
         if not self.is_compressed:
-            return
-        if self.data is None:
-            return
+            return self
+        if self._masks is None:
+            return self
         if self.verbose > 0:
             print(f"[Tree2D] uncompress masks")
-        self.data['masks'] = self._uncompress()
+        self._masks = self._uncompress()
         self._is_compressed = False
+        return self
 
     @property
     def masks(self) -> Optional[Tensor]:
-        if self.data is None:
+        if self._masks is None:
             return None
         else:
             self.uncompress()
-            return self.data['masks']
+            return self._masks
 
-    @property
-    def scores(self):
-        if self.data is None:
-            return None
-        return self.data['iou_preds']
+    # @property
+    # def scores(self):
+    #     if self.data is None:
+    #         return None
+    #     return self._scores
 
     def remove_background(self, background: Tensor, threshold=0.5):
         """The masks belong to background"""
         self.uncompress()
-        keep = torch.ones(len(self.data['masks']), device=self.device, dtype=torch.bool)
-        for i in range(len(keep)):
-            mask = self.data['masks'][i]
+        print(utils.show_shape(self._masks, self._areas, self.scores))
+        keep = torch.ones(self.num_masks + 1, device=self.device, dtype=torch.bool)
+        for i in range(self.num_masks):
+            mask = self._masks[i]
             if (mask & background).sum() / mask.sum() >= threshold:  # remove when area rate >= threshold
-                keep[i] = False
+                keep[i + 1] = False
         if keep.all():
             return
-        self.filter(keep)
+        self.node_rearrange(torch.nonzero(keep)[:, 0])
+        self.reset()
         self.update_tree()
         self.remove_not_in_tree()
         if self.verbose > 0:

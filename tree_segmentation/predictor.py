@@ -1,24 +1,38 @@
-from typing import Optional, Union, Tuple
+"""
+based on: segment anything
+reference: https://github.com/facebookresearch/segment-anything
+"""
+from typing import Optional, Union, Tuple, List, Dict, Any
 
 import numpy as np
 import torch
 from torch import Tensor
-from torchvision.ops import batched_nms
+from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
 
 from semantic_sam import SemanticSAM
 from segment_anything.modeling import Sam
 from segment_anything.utils.amg import (
     build_point_grid,
     MaskData,
+    area_from_rle,
     batch_iterator,
-    calculate_stability_score,
     batched_mask_to_box,
-    rle_to_mask,
-    remove_small_regions,
+    box_xyxy_to_xywh,
+    build_all_layer_point_grids,
+    calculate_stability_score,
+    coco_encode_rle,
+    generate_crop_boxes,
+    is_box_near_crop_edge,
     mask_to_rle_pytorch,
+    remove_small_regions,
+    rle_to_mask,
+    uncrop_boxes_xyxy,
+    uncrop_masks,
+    uncrop_points,
 )
 from segment_anything.utils.transforms import ResizeLongestSide
 from tree_segmentation.tree_2d_segmentation import Tree2D
+from tree_segmentation.extension.utils import TimeWatcher
 
 
 # noinspection PyAttributeOutsideInit
@@ -27,27 +41,64 @@ class TreePredictor:
     def __init__(
         self,
         model: Union[Sam, SemanticSAM],
+        image_size=1024,
+        points_per_side: Optional[int] = 32,
         points_per_batch: int = 64,
         pred_iou_thresh: float = 0.88,
         stability_score_thresh: float = 0.95,
         stability_score_offset: float = 1.0,
         box_nms_thresh: float = 0.7,
-        image_size=1024,
+        crop_n_layers: int = 0,
+        crop_nms_thresh: float = 0.7,
+        crop_overlap_ratio: float = 512 / 1500,
+        crop_n_points_downscale_factor: int = 1,
+        point_grids: Optional[List[np.ndarray]] = None,
+        min_mask_region_area: int = 0,
+        output_mode: str = "binary_mask",
     ) -> None:
         """
         Using a SAM model, generates masks for the entire image.
-        Generates a grid of point prompts over the image, then filters low quality and duplicate masks.
-        The default settings are chosen for SAM with a ViT-H backbone.
+        Generates a grid of point prompts over the image, then filters
+        low quality and duplicate masks. The default settings are chosen
+        for SAM with a ViT-H backbone.
 
-        Args:
+        Arguments:
           model (Sam): The SAM model to use for mask prediction.
-          points_per_batch (int): Sets the number of points run simultaneously by the model.
-            Higher numbers may be faster but use more GPU memory.
-          pred_iou_thresh (float): A filtering threshold in [0,1], using the model's predicted mask quality.
+          points_per_side (int or None): The number of points to be sampled
+            along one side of the image. The total number of points is
+            points_per_side**2. If None, 'point_grids' must provide explicit
+            point sampling.
+          points_per_batch (int): Sets the number of points run simultaneously
+            by the model. Higher numbers may be faster but use more GPU memory.
+          pred_iou_thresh (float): A filtering threshold in [0,1], using the
+            model's predicted mask quality.
           stability_score_thresh (float): A filtering threshold in [0,1], using
-            the stability of the mask under changes to the cutoff used to binarize the model's mask predictions.
-          stability_score_offset (float): The amount to shift the cutoff when calculated the stability score.
-          box_nms_thresh (float): The box IoU cutoff used by non-maximal suppression to filter duplicate masks.
+            the stability of the mask under changes to the cutoff used to binarize
+            the model's mask predictions.
+          stability_score_offset (float): The amount to shift the cutoff when
+            calculated the stability score.
+          box_nms_thresh (float): The box IoU cutoff used by non-maximal
+            suppression to filter duplicate masks.
+          crop_n_layers (int): If >0, mask prediction will be run again on
+            crops of the image. Sets the number of layers to run, where each
+            layer has 2**i_layer number of image crops.
+          crop_nms_thresh (float): The box IoU cutoff used by non-maximal
+            suppression to filter duplicate masks between different crops.
+          crop_overlap_ratio (float): Sets the degree to which crops overlap.
+            In the first crop layer, crops will overlap by this fraction of
+            the image length. Later layers with more crops scale down this overlap.
+          crop_n_points_downscale_factor (int): The number of points-per-side
+            sampled in layer n is scaled down by crop_n_points_downscale_factor**n.
+          point_grids (list(np.ndarray) or None): A list over explicit grids
+            of points used for sampling, normalized to [0,1]. The nth grid in the
+            list is used in the nth crop layer. Exclusive with points_per_side.
+          min_mask_region_area (int): If >0, postprocessing will be applied
+            to remove disconnected regions and holes in masks with area smaller
+            than min_mask_region_area. Requires opencv.
+          output_mode (str): The form masks are returned in. Can be 'binary_mask',
+            'uncompressed_rle', or 'coco_rle'. 'coco_rle' requires pycocotools.
+            For large resolutions, 'binary_mask' may consume large amounts of
+            memory.
         """
 
         self.model = model
@@ -63,34 +114,68 @@ class TreePredictor:
             raise ValueError(f"The model must be SAM or SemanticSAM, not {type(model)}")
 
         self.reset_image()
+        assert (points_per_side is None) != (point_grids is
+                                             None), "Exactly one of points_per_side or point_grid must be provided."
+        if points_per_side is not None:
+            self.point_grids = build_all_layer_point_grids(
+                points_per_side,
+                crop_n_layers,
+                crop_n_points_downscale_factor,
+            )
+        elif point_grids is not None:
+            self.point_grids = point_grids
+        else:
+            raise ValueError("Can't have both points_per_side and point_grid be None.")
 
+        assert output_mode in [
+            "binary_mask",
+            "uncompressed_rle",
+            "coco_rle",
+        ], f"Unknown output_mode {output_mode}."
+        if output_mode == "coco_rle":
+            from pycocotools import mask as mask_utils  # type: ignore # noqa: F401
         self.points_per_batch = points_per_batch
         self.pred_iou_thresh = pred_iou_thresh
         self.stability_score_thresh = stability_score_thresh
         self.stability_score_offset = stability_score_offset
         self.box_nms_thresh = box_nms_thresh
+        self.crop_n_layers = crop_n_layers
+        self.crop_nms_thresh = crop_nms_thresh
+        self.crop_overlap_ratio = crop_overlap_ratio
+        self.crop_n_points_downscale_factor = crop_n_points_downscale_factor
+        self.min_mask_region_area = min_mask_region_area
+        self.output_mode = output_mode
 
     @torch.no_grad()
-    def generate(
+    def tree_generate(
         self,
         image: np.ndarray,
         points_per_side: Optional[int] = 32,
         points_per_update: int = 256,
         min_mask_region_area: int = 50,
-        max_iters=100,
+        max_steps=100,
         in_threshold=0.90,
         in_thre_area=10,
         union_threshold=0.10,
         sample_limit_fn=None,
         device=None,
         verbose=0,
+        timer: TimeWatcher = None,
     ) -> Tree2D:
         assert image.shape[-1] == 3
+        if timer is not None:
+            timer.start()
         self.set_image(image)
+        if timer is not None:
+            timer.log('feature')
         init_points = build_point_grid(points_per_side)
+        if timer is not None:
+            timer.log('points')
         data = self.process_points(init_points)
+        if timer is not None:
+            timer.log('decode', len(init_points))
 
-        tree_data = Tree2D(
+        tree2d = Tree2D(
             data,
             in_threshold=in_threshold,
             union_threshold=union_threshold,
@@ -99,62 +184,192 @@ class TreePredictor:
             device=device,
             verbose=verbose,
         )
-        tree_data.update_tree()
+        num_masks = len(data['masks'])
+        num_ignored = tree2d.update_tree()
+        tree2d.remove_not_in_tree()
+        if timer is not None:
+            timer.log('tree', len(init_points))
         if verbose > 0:
-            print('complete init segmentation')
-
-        for step in range(max_iters):
+            print('[Tree2D] complete init segmentation')
+        for step in range(max_steps):
             # points, unfilled_mask = tree_data.sample_unfilled(points_per_update, filled_threshold)
-            points = tree_data.sample_by_counts(points_per_update, sample_limit_fn)
+            points = tree2d.sample_by_counts(points_per_update, sample_limit_fn)
             if points is None:
                 break
-            new_mask_data = self.process_points(points)
-
-            tree_data.cat(new_mask_data)
-            tree_data.update_tree()
-            tree_data.remove_not_in_tree()
-            tree_data.update_tree()
+            if timer is not None:
+                timer.log('points')
+            data = self.process_points(points)
+            if timer is not None:
+                timer.log('decode', len(points))
+            num_masks += len(data['masks'])
+            num_ignored += tree2d.insert_batch(data)
+            # tree_data.update_tree()
+            tree2d.remove_not_in_tree()
+            # tree_data.update_tree()
+            if timer is not None:
+                timer.log('tree', len(points))
             if verbose > 0:
-                print(f'complete iter {step} update segmentation')
+                print(f'[Tree2D] complete step {step} update segmentation')
         self.reset_image()
-        tree_data.post_process()
-        # tree_data.to_numpy()
-
-        # Filter small disconnected regions and holes in masks
-        # if self.min_mask_region_area > 0:
-        #     data = self.postprocess_small_regions(
-        #         data,
-        #         self.min_mask_region_area,
-        #         max(self.box_nms_thresh, self.crop_nms_thresh),
-        #     )
-        return tree_data
+        tree2d.post_process()
+        if timer is not None:
+            timer.log('post')
+        if verbose > 0:
+            print(f"[Tree2D] ignore {num_ignored}/{num_masks} masks during generate")
+        return tree2d
 
     @torch.no_grad()
     def process_points(self, points: np.ndarray, normalized=True) -> MaskData:
         # Generate masks for this crop in batches
         data = MaskData()
         for (points,) in batch_iterator(self.points_per_batch, points):
-            batch_data = self._process_batch(points, self.original_size, normalized)
+            batch_data = self._process_batch(points, self.original_size, normalized=normalized)
             data.cat(batch_data)
             del batch_data
-        # self.predictor.reset_image()
 
-        # Remove duplicates within this crop.
+        # Remove duplicates
         keep_by_nms = batched_nms(
             data["boxes"].float(),
             data["iou_preds"],
             torch.zeros_like(data["boxes"][:, 0]),  # categories
             iou_threshold=self.box_nms_thresh)
         data.filter(keep_by_nms)
-
-        # Return to the original image frame
-        # data["boxes"] = uncrop_boxes_xyxy(data["boxes"], crop_box)
-        # data["points"] = uncrop_points(data["points"], crop_box)
-        # data["crop_boxes"] = torch.tensor([crop_box for _ in range(len(data["rles"]))])
-
         return data
 
-    def _process_batch(self, points: Union[np.ndarray, Tensor], im_size: Tuple[int, ...], normalized=True) -> MaskData:
+    @torch.no_grad()
+    def generate(self, image: np.ndarray) -> List[Dict[str, Any]]:
+        """
+        Generates masks for the given image.
+
+        Arguments:
+          image (np.ndarray): The image to generate masks for, in HWC uint8 format.
+
+        Returns:
+           list(dict(str, any)): A list over records for masks. Each record is
+             a dict containing the following keys:
+               segmentation (dict(str, any) or np.ndarray): The mask. If
+                 output_mode='binary_mask', is an array of shape HW. Otherwise,
+                 is a dictionary containing the RLE.
+               bbox (list(float)): The box around the mask, in XYWH format.
+               area (int): The area in pixels of the mask.
+               predicted_iou (float): The model's own prediction of the mask's
+                 quality. This is filtered by the pred_iou_thresh parameter.
+               point_coords (list(list(float))): The point coordinates input
+                 to the model to generate this mask.
+               stability_score (float): A measure of the mask's quality. This
+                 is filtered on using the stability_score_thresh parameter.
+               crop_box (list(float)): The crop of the image used to generate
+                 the mask, given in XYWH format.
+        """
+
+        # Generate masks
+        mask_data = self._generate_masks(image)
+
+        # Filter small disconnected regions and holes in masks
+        if self.min_mask_region_area > 0:
+            mask_data = self.postprocess_small_regions(
+                mask_data,
+                self.min_mask_region_area,
+                max(self.box_nms_thresh, self.crop_nms_thresh),
+            )
+
+        # Encode masks
+        if self.output_mode == "coco_rle":
+            mask_data["segmentations"] = [coco_encode_rle(rle) for rle in mask_data["rles"]]
+        elif self.output_mode == "binary_mask":
+            mask_data["segmentations"] = [rle_to_mask(rle) for rle in mask_data["rles"]]
+        else:
+            mask_data["segmentations"] = mask_data["rles"]
+
+        # Write mask records
+        curr_anns = []
+        for idx in range(len(mask_data["segmentations"])):
+            ann = {
+                "segmentation": mask_data["segmentations"][idx],
+                "area": area_from_rle(mask_data["rles"][idx]),
+                "bbox": box_xyxy_to_xywh(mask_data["boxes"][idx]).tolist(),
+                "predicted_iou": mask_data["iou_preds"][idx].item(),
+                "point_coords": [mask_data["points"][idx].tolist()],
+                "stability_score": mask_data["stability_score"][idx].item(),
+                "crop_box": box_xyxy_to_xywh(mask_data["crop_boxes"][idx]).tolist(),
+            }
+            curr_anns.append(ann)
+
+        return curr_anns
+
+    def _generate_masks(self, image: np.ndarray) -> MaskData:
+        orig_size = image.shape[:2]
+        crop_boxes, layer_idxs = generate_crop_boxes(orig_size, self.crop_n_layers, self.crop_overlap_ratio)
+
+        # Iterate over image crops
+        data = MaskData()
+        for crop_box, layer_idx in zip(crop_boxes, layer_idxs):
+            crop_data = self._process_crop(image, crop_box, layer_idx, orig_size)
+            data.cat(crop_data)
+
+        # Remove duplicate masks between crops
+        if len(crop_boxes) > 1:
+            # Prefer masks from smaller crops
+            scores = 1 / box_area(data["crop_boxes"])
+            scores = scores.to(data["boxes"].device)
+            keep_by_nms = batched_nms(
+                data["boxes"].float(),
+                scores,
+                torch.zeros_like(data["boxes"][:, 0]),  # categories
+                iou_threshold=self.crop_nms_thresh,
+            )
+            data.filter(keep_by_nms)
+
+        data.to_numpy()
+        return data
+
+    def _process_crop(
+        self,
+        image: np.ndarray,
+        crop_box: List[int],
+        crop_layer_idx: int,
+        orig_size: Tuple[int, ...],
+    ) -> MaskData:
+        # Crop the image and calculate embeddings
+        x0, y0, x1, y1 = crop_box
+        cropped_im = image[y0:y1, x0:x1, :]
+        cropped_im_size = cropped_im.shape[:2]
+        self.set_image(cropped_im)
+
+        # Get points for this crop
+        points_scale = np.array(cropped_im_size)[None, ::-1]
+        points_for_image = self.point_grids[crop_layer_idx] * points_scale
+
+        # Generate masks for this crop in batches
+        data = MaskData()
+        for (points,) in batch_iterator(self.points_per_batch, points_for_image):
+            batch_data = self._process_batch(points, cropped_im_size, orig_size, crop_box, False, True)
+            data.cat(batch_data)
+            del batch_data
+        self.reset_image()
+
+        # Remove duplicates within this crop.
+        keep_by_nms = batched_nms(
+            data["boxes"].float(),
+            data["iou_preds"],
+            torch.zeros_like(data["boxes"][:, 0]),  # categories
+            iou_threshold=self.box_nms_thresh,
+        )
+        data.filter(keep_by_nms)
+
+        # Return to the original image frame
+        data["boxes"] = uncrop_boxes_xyxy(data["boxes"], crop_box)
+        data["points"] = uncrop_points(data["points"], crop_box)
+        data["crop_boxes"] = torch.tensor([crop_box for _ in range(len(data["rles"]))])
+        return data
+
+    def _process_batch(self,
+                       points: Union[np.ndarray, Tensor],
+                       im_size: Tuple[int, ...],
+                       orig_size: Tuple[int, ...] = None,
+                       crop_box: List[int] = None,
+                       normalized=True,
+                       compress=False) -> MaskData:
         # Run model on this batch
         if isinstance(points, Tensor):
             if normalized:
@@ -195,9 +410,18 @@ class TreePredictor:
         data["boxes"] = batched_mask_to_box(data["masks"])
 
         # Filter boxes that touch crop boundaries
-        # keep_mask = ~is_box_near_crop_edge(data["boxes"], crop_box, [0, 0, orig_w, orig_h])
-        # if not torch.all(keep_mask):
-        #     data.filter(keep_mask)
+        if crop_box is not None:
+            orig_h, orig_w = orig_size
+            keep_mask = ~is_box_near_crop_edge(data["boxes"], crop_box, [0, 0, orig_w, orig_h])
+            if not torch.all(keep_mask):
+                data.filter(keep_mask)
+
+        # Compress to RLE
+        if compress:
+            orig_h, orig_w = orig_size
+            data["masks"] = uncrop_masks(data["masks"], crop_box, orig_h, orig_w)
+            data["rles"] = mask_to_rle_pytorch(data["masks"])
+            del data["masks"]
 
         return data
 
