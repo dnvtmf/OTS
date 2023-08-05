@@ -43,7 +43,9 @@ class TreeSegmentMetric:
             raise NotImplementedError(f"prediction: {prediction.__class__.__name__}, gt: {gt.__class__.__name__}")
         N, M = IoU.shape
         TS = self.calc_tree_structure_score(prediction, indices_pd)
-        assert 0 <= TS.min() and TS.max() <= 1. + 1e-4, f"{TS.aminmax()}"
+        # assert 0 <= TS.min() and TS.max() <= 1. + 1e-4, f"{TS.aminmax()}"
+        if not (0 <= TS.min() and TS.max() <= 1. + 1e-4):
+            print(f"TS not in [0, 1]: {TS.aminmax()}")
         # get TQ
         matched_iou, matched = IoU.max(dim=1)
         iou_ = torch.zeros_like(IoU)
@@ -180,6 +182,10 @@ class TreeSegmentMetric:
             inter = F.linear(masks, masks)
         IoU = inter / (areas[:, None] + areas[None, :] - inter).clamp_min(self.eps)
         In = inter / (areas[:, None]).clamp_min(self.eps)
+        IoU.fill_diagonal_(1.)
+        In.fill_diagonal_(1.)
+        assert 0 <= IoU.min() and IoU.max() <= 1 + 1e-4, f"{IoU.aminmax()}"
+        assert 0 <= In.min() and In.max() <= 1 + 1e-4, f"{In.aminmax()}"
 
         # x, y = torch.triu_indices(M, M, 1, device=IoU.device)
         # score_1 = torch.maximum(1 - IoU[x, y], torch.maximum(inter[x, y] / areas[x], inter[x, y] / areas[y]))
@@ -203,7 +209,16 @@ class TreeSegmentMetric:
             mask_u = p.masks[indices[u - 1]] if u > 0 else torch.ones_like(p.masks[0])
             for c in tree.get_children(u):
                 mask_c = p.masks[indices[c - 1]]
-                s += (mask_u * mask_c).sum() / mask_c.sum().clamp_min(self.eps)
+                in_cu = (mask_u * mask_c).sum() / mask_c.sum().clamp_min(self.eps) if u != 0 else 1.
+                if not abs(in_cu - (In[c - 1, u - 1] if u > 0 else 1)) < 1e-5:
+                    print(c, u)
+                    print(in_cu, (In[c - 1, u - 1] if u > 0 else 1))
+                    print(mask_u.sum(), mask_c.sum())
+                    print(areas)
+                assert abs(in_cu - (In[c - 1, u - 1] if u > 0 else 1)) < 1e-5, \
+                    f"{in_cu- (In[c - 1, u - 1] if u > 0 else 1)}"
+                s += in_cu
+
                 # cmp[c - 1] = (mask_u * mask_c).sum() / mask_c.sum().clamp_min(self.eps)
                 total = 0
                 cnt = 0
@@ -230,9 +245,10 @@ class TreeSegmentMetric:
             disjoint = [1 - IoU[i, c - 1] for c in tree.get_children(pi) if c - 1 != i]
             temp[i] = 1 if len(disjoint) == 0 else sum(disjoint) / len(disjoint)
             now += temp[i]
+        # check_score = check().item()
         # print(now, check())
         # print([x - y for x, y in zip(cmp, temp.tolist()) if abs(x - y) > 1e-6])
-        # assert abs(now.item() - check().item()) < 1e-4, f"{abs(now.item() - check().item())}"
+        # assert abs(now.item() - check_score) < 1e-4, f"{abs(now.item() - check_score)}"
         scores[M - 1] = now / M
         for t in range(M - 1, 0, -1):
             pi = tree.parent[t + 1]
@@ -252,8 +268,12 @@ class TreeSegmentMetric:
                 now += temp[children].sum()
             scores[t - 1] = now / t
             # check_score = check()
+            # print(f't={t}, children={children}')
+            # for c in children:
+            #     print(cmp[c], temp[c])
+            # print(IoU[children, :][:, children])
             # print([x - y for x, y in zip(cmp, temp.tolist()) if abs(x - y) > 1e-6])
-            # assert abs(now.item() - check_score.item()) < 1e-4, f"{abs(now.item() - check_score.item())}"
+            # assert abs(now - check_score) < 1e-4, f"{abs(now - check_score)}"
         return scores * 0.5
 
     @property

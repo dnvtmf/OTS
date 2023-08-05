@@ -154,7 +154,7 @@ class TreePredictor:
         points_per_update: int = 256,
         min_mask_region_area: int = 50,
         max_steps=100,
-        in_threshold=0.90,
+        in_threshold=0.80,
         in_thre_area=10,
         union_threshold=0.10,
         sample_limit_fn=None,
@@ -216,6 +216,7 @@ class TreePredictor:
             timer.log('post')
         if verbose > 0:
             print(f"[Tree2D] ignore {num_ignored}/{num_masks} masks during generate")
+        tree2d.ignore_rate = num_ignored / num_masks
         return tree2d
 
     @torch.no_grad()

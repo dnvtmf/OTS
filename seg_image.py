@@ -86,7 +86,7 @@ def main():
         image_size=args.image_size)
     print('build predictor')
 
-    results = predictor.generate(
+    results = predictor.tree_generate(
         image=image,
         points_per_side=args.points_per_side,
         points_per_update=args.points_per_update,

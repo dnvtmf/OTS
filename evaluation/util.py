@@ -15,7 +15,7 @@ from rich.tree import Tree
 import torch_geometric as pyg
 
 from semantic_sam import semantic_sam_l, semantic_sam_t
-from segment_anything import build_sam
+from segment_anything import build_sam, build_sam_vit_b, build_sam_vit_l
 from tree_segmentation.extension import Mesh, utils, ops_3d
 from tree_segmentation import Tree3Dv2, Tree3D, TreePredictor, render_mesh
 from tree_segmentation.metric import TreeSegmentMetric
@@ -27,6 +27,9 @@ def predictor_options(parser: argparse.ArgumentParser):
     group = parser.add_argument_group('Preditor options')
     # model
     group.add_argument('-sam', '--segment-anything', action='store_true', default=False)
+    group.add_argument('-samH', '--segment-anything-h', action='store_true', default=False)
+    group.add_argument('-samL', '--segment-anything-l', action='store_true', default=False)
+    group.add_argument('-samB', '--segment-anything-b', action='store_true', default=False)
     group.add_argument('-ssl', '--semantic-sam-l', action='store_true', default=False, help='Default')
     group.add_argument('-sst', '--semantic-sam-t', action='store_true', default=False)
     group.add_argument(
@@ -39,12 +42,12 @@ def predictor_options(parser: argparse.ArgumentParser):
     group.add_argument('--image-size', default=1024, type=int)
     # tree segmentation options
     group.add_argument('--max-steps', default=100, type=int)
-    group.add_argument('--points_per_update', default=256, type=int)
-    group.add_argument('--points_per_side', default=32, type=int)
-    group.add_argument('--in_threshold', default=0.9, type=float)
-    group.add_argument('--in_area_threshold', default=50, type=float)
-    group.add_argument('--union_threshold', default=0.1, type=float)
-    group.add_argument('--min_area', default=100, type=float)
+    group.add_argument('--points-per-update', default=256, type=int)
+    group.add_argument('--points-per-side', default=32, type=int)
+    group.add_argument('--in-threshold', default=0.8, type=float)
+    group.add_argument('--in-area-threshold', default=50, type=float)
+    group.add_argument('--union-threshold', default=0.1, type=float)
+    group.add_argument('--min-area', default=100, type=float)
     return group
 
 
@@ -53,11 +56,21 @@ def get_predictor(args, print=print):
     if predictor is not None:
         return predictor
     model_dir = Path(args.weights).expanduser()
-    if args.segment_anything:
+    if args.segment_anything or args.segment_anything_h:
         assert model_dir.joinpath('sam_vit_h_4b8939.pth').exists(), f"Not model 'sam_vit_h_4b8939.pth' in {model_dir}"
         model = build_sam(model_dir.joinpath('sam_vit_h_4b8939.pth'))
         #save_root.joinpath('SAM')
         print('Loaded Model SAM')
+    elif args.segment_anything_l:
+        assert model_dir.joinpath('sam_vit_l_0b3195.pth').exists(), f"Not model 'sam_vit_l_0b3195.pth' in {model_dir}"
+        model = build_sam_vit_l(model_dir.joinpath('sam_vit_l_0b3195.pth'))
+        #save_root.joinpath('SAM')
+        print('Loaded Model SAM-L')
+    elif args.segment_anything_b:
+        assert model_dir.joinpath('sam_vit_b_01ec64.pth').exists(), f"Not model 'sam_vit_b_01ec64.pth' in {model_dir}"
+        model = build_sam_vit_b(model_dir.joinpath('sam_vit_b_01ec64.pth'))
+        #save_root.joinpath('SAM')
+        print('Loaded Model SAM-B')
     elif args.semantic_sam_t:
         assert model_dir.joinpath('swint_only_sam_many2many.pth').exists(), \
             f"Not model 'swint_only_sam_many2many.pth' in {model_dir}"
@@ -87,7 +100,7 @@ def get_predictor(args, print=print):
 
 def run_predictor(image: np.ndarray, device=torch.device('cuda')):
     assert predictor is not None
-    results = predictor.generate(
+    results = predictor.tree_generate(
         image,
         points_per_side=predictor.generate_cfg.points_per_side,
         points_per_update=predictor.generate_cfg.points_per_update,

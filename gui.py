@@ -222,15 +222,15 @@ class TreeSegmentGUI(TreeSegment):
                 device=self.device,
                 verbose=1,
             )  # type: Tree2D
-        if self._tree_2d.data is None and self.tri_id is not None:
+        if self._tree_2d._masks is None and self.tri_id is not None:
             background = self.tri_id == 0
             foreground = torch.logical_not(background)
             mask_data = MaskData(
                 masks=torch.stack([foreground, background], dim=0),
                 iou_preds=torch.ones(2, device=self.tri_id.device) * 2,
-                points=torch.zeros((2, 2), dtype=torch.float64),
-                stability_score=torch.ones(2, device=self.tri_id.device) * 2,
-                boxes=torch.zeros((2, 4), device=self.tri_id.device),
+                # points=torch.zeros((2, 2), dtype=torch.float64),
+                # stability_score=torch.ones(2, device=self.tri_id.device) * 2,
+                # boxes=torch.zeros((2, 4), device=self.tri_id.device),
             )
             self._tree_2d.cat(mask_data)
             self._tree_2d.update_tree()
@@ -299,6 +299,7 @@ class TreeSegmentGUI(TreeSegment):
         self._now_level_2d = level
         if self._now_level_2d >= -1:
             dpg.bind_item_theme(f"level{self._now_level_2d}", self.choose_theme)
+        self._need_update_2d = True
 
     @property
     def levels_3d(self):
@@ -1066,7 +1067,7 @@ class TreeSegmentGUI(TreeSegment):
 
         with dpg.group(horizontal=True):
             t1 = dpg.add_text('Merge: in=')
-            o31 = dpg.add_input_float(default_value=0.9, step=0, tag='in_threshold')
+            o31 = dpg.add_input_float(default_value=0.8, step=0, tag='in_threshold')
             t2 = dpg.add_text('in area=')
             o32 = dpg.add_input_int(default_value=10, step=0, tag='in_area_threshold')
             t3 = dpg.add_text('union=')

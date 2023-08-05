@@ -43,7 +43,7 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 
 ### 8.5 work list
 - [ ] [2D] 完成2D的实验
-- [ ] [2D] 基于SA-1B选取超参数
+- [x] [2D] 基于SA-1B选取超参数
 - [ ] [3D] 快速2D分割
 - [ ] [Paper] 撰写实验部分
 

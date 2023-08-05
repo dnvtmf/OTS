@@ -41,7 +41,7 @@ def options():
     parser.add_argument('--eval-part', default=110, type=int, help='The part index of SA-1B to evaluate')
     parser.add_argument('--log', default='log.txt', help='The filepath for log file')
     parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
-    
+    utils.add_bool_option(parser, '--force', default=False, help='Force run generate')
     predictor_options(parser)
     args = parser.parse_args()
     return args
@@ -75,7 +75,13 @@ def main():
     time_avg = utils.TimeWatcher()
     timer.start()
     time_avg.start()
+    ignore_rate = 0
+    num_count = 0
+    num_masks = []
     for i, image_path in enumerate(eval_image_paths, 1):
+        # if i < 106:
+        #     continue
+        # print(i, image_path)
         image = utils.load_image(image_path)
         H, W, _ = image.shape
         scale = min(args.image_size / H, args.image_size / W)
@@ -85,16 +91,21 @@ def main():
         time_avg.log('gt')
         if save_root is not None:
             save_path = save_root.joinpath(image_path.name).with_suffix('.tree2d')
-            if save_path.exists():
+            if save_path.exists() and not args.force:
                 prediction = Tree2D(device=device)
                 prediction.load(save_path)
             else:
                 prediction = run_predictor(image, device=device)
+
                 prediction.save(save_path)
                 time_avg.log('tree2d')
         else:
             prediction = run_predictor(image, device=device)
             time_avg.log('tree2d')
+        if hasattr(prediction, 'ignore_rate'):
+            ignore_rate += prediction.ignore_rate
+            num_count += 1
+        num_masks.append(prediction.num_masks)
         metric.update(prediction, gt.to(device), return_match=False)
         del prediction, gt
         time_avg.log('metric')
@@ -107,7 +118,8 @@ def main():
     console.print('Time:', time_avg)
     for k, v in metric.summarize().items():
         console.print(f"{k:5s}: {v}")
-
+    console.print('average masks:', np.mean(num_masks))
+    console.print('ignore rate:', ignore_rate / max(1, num_count))
     console.save_text(args.log)
 
 
