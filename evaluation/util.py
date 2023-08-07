@@ -40,6 +40,7 @@ def predictor_options(parser: argparse.ArgumentParser):
     group.add_argument('--box_nms_thresh', default=0.7, type=float)
     group.add_argument('--points_per_batch', default=64, type=int)
     group.add_argument('--image-size', default=1024, type=int)
+    group.add_argument('--explore-ratio', default=0.5, type=float, help='The ratio to explore unsegment part')
     # tree segmentation options
     group.add_argument('--max-steps', default=100, type=int)
     group.add_argument('--points-per-update', default=256, type=int)
@@ -98,7 +99,7 @@ def get_predictor(args, print=print):
     return predictor
 
 
-def run_predictor(image: np.ndarray, device=torch.device('cuda')):
+def run_predictor(image: np.ndarray, device=torch.device('cuda'), compress=True):
     assert predictor is not None
     results = predictor.tree_generate(
         image,
@@ -109,7 +110,9 @@ def run_predictor(image: np.ndarray, device=torch.device('cuda')):
         in_threshold=predictor.generate_cfg.in_threshold,
         in_thre_area=predictor.generate_cfg.in_area_threshold,
         union_threshold=predictor.generate_cfg.union_threshold,
+        ratio=predictor.generate_cfg.explore_ratio,
         device=device,
+        compress=compress,
     )
     predictor.reset_image()
     return results

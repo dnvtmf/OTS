@@ -1,7 +1,7 @@
 #!/usr/bin/env zsh
 
-suffix=""
-args=(--max-steps=0 --print-interval=10 -n=1000)
+suffix="_origin"
+args=(--max-steps=0 --print-interval=10 -n=1000 --uncompress)
 
 screen -S gpu1 -p 0 -X stuff \
     "python evaluation/eval_SA_1B.py -ssl \

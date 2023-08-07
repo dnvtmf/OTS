@@ -91,7 +91,7 @@ def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path):
     part_map = part_map.to(device)
     assert len(meta_parts) == 1
     get_ground_truth(meta_parts[0], gt, show_tree, part_names, part_map)
-    gt.save(cache_dir.joinpath('gt.tree3d'))
+    # gt.save(cache_dir.joinpath('gt.tree3d'))
     gt_v2 = Tree3Dv2.convert(gt)
     gt_v2.save(cache_dir.joinpath('gt.tree3dv2'))
     print('Save gt result')
@@ -137,7 +137,7 @@ def run_2d_segmentation(cache_dir: Path, images: Tensor, tri_ids: Tensor, Tw2vs:
         data = {
             'tree_data': tree_data.save(filename=None),
             'tri_id': tri_ids[index].clone(),
-            'image': images[index].clone(),
+            # 'image': images[index].clone(),
             'Tw2v': Tw2vs[index].clone(),
         }
         torch.save(data, cache_dir.joinpath(f"view_{index:04d}.data"))
@@ -175,6 +175,7 @@ def eval_one(
     elif force_2d or len(list(cache_dir.glob(f"view_*.data"))) < num_views:
         images, tri_ids, Tw2vs = get_images(mesh, image_size=1024, num_views=num_views, seed=42)
         run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
+    # return
     # print(utils.get_GPU_memory())
     # 3D Tree segmentation
     save_path = cache_dir.joinpath('gt_seg.tree3dv2' if use_gt_2d else 'my.tree3dv2')
@@ -187,18 +188,50 @@ def eval_one(
         else:
             tree3d.load_2d_results(cache_dir)
         gt.to(torch.device('cpu'))
-        Gv = tree3d.build_view_graph()
-        Gm = tree3d.build_graph(Gv)
+        # Gv = tree3d.build_view_graph()
+        # Gm = tree3d.build_graph(Gv)
+        A = tree3d.build_all_graph()
         X, _ = tree3d.compress_masks(epochs=epochs_ea)
-        K = tree3d.Lmax * 2
+        K = int(tree3d.Lmax * args.K_ratio)
         gnn = pyg.nn.GCN(
             in_channels=X.shape[1], hidden_channels=128, num_layers=2, out_channels=K, norm='BatchNorm').cuda()
         # print(gnn)
-        tree3d.run(epochs=epochs_run, K=K, gnn=gnn, A=Gm * Gm.ge(0.5), X=X, weights={'es': 0, 'recon': 0, 'tree': 0})
+        tree3d.run(
+            epochs=epochs_run,
+            K=K,
+            gnn=gnn,
+            A=A * A.ge(0.5),
+            X=X,
+            weights=args.loss_weights,
+            print=print,
+        )
         tree3d.save(save_path)
         print(f"save tree3d results to {save_path}")
     metric.update(tree3d, gt.to(device))
     return
+
+
+def load_instance_segmentaion_gt_for_point_clouds(data_root: Path):
+    import h5py
+    ins_seg_root = data_root.joinpath('../ins_seg_h5').resolve()
+    print(ins_seg_root)
+    categories = os.listdir(ins_seg_root)
+    print(len(categories))
+    for cat in categories:
+        test_json = ins_seg_root.joinpath(cat, 'test-00.json')
+        with open(test_json, 'r') as f:
+            test_info = json.load(f)
+        print(cat, len(test_info))
+        print(test_info[0])
+        with h5py.File(ins_seg_root.joinpath(cat, 'test-00.h5'), 'r') as f:
+            print(list(f.keys()))
+            print(np.array(f['label']).shape)
+            print(np.array(f['rgb']).shape)
+            print(np.array(f['pts']).shape)
+            print(np.array(f['opacity']).shape)
+            print(np.array(f['nor']).shape)
+        # print(test_info[0])
+        break
 
 
 console = None
@@ -211,11 +244,12 @@ def options():
     parser.add_argument('-n', '--epochs', default=5000, type=int, help='The number of epochs when run tree3d')
     parser.add_argument('-ae', '--ae-epochs', default=3000, type=int, help='The number of epochs when run autoencoder')
     parser.add_argument('-v', '--num-views', default=100, type=int, help='The number of rendered views')
-    parser.add_argument('-ns', '--num-shapes', default=10, type=int, help='The number of shapes to evalute')
+    parser.add_argument('-ns', '--num-shapes', default=10, type=int, help='The number of shapes per category')
     parser.add_argument('--seed', default=42, type=int, help='The seed to random choose evaluation shapes')
-    # parser.add_argument('--log', default='log.txt', help='The filepath for log file')
     # parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
     parser.add_argument('--gt-2d', action='store_true', default=False, help='Use GT 2D segmentation results')
+    parser.add_argument('-k', '--K-ratio', default=2, type=float, help='Set the default ')
+    parser.add_argument('--log', default=None, help='The filepath for log file')
     parser.add_argument(
         '--force-3d',
         action='store_true',
@@ -226,16 +260,39 @@ def options():
         action='store_true',
         default=False,
         help='Force run 2d tree segment rather than use cached results')
+    utils.add_cfg_option(parser, '--loss-weights', default={}, help='The weigths of loss')
+
     predictor_options(parser)
     args = parser.parse_args()
     return args
 
 
+def get_shapes(root: Path, num_max_per_shape=100, print=print):
+    ins_seg_root = root.joinpath('../ins_seg_h5').resolve()
+    print('Dataset split root:', ins_seg_root)
+    categories = os.listdir(ins_seg_root)
+    print('The number of categories:', len(categories))
+    anno_ids = []
+    for cat in categories:
+        test_json = ins_seg_root.joinpath(cat, 'test-00.json')
+        with open(test_json, 'r') as f:
+            test_info = json.load(f)
+        print(f'Category {cat} have {len(test_info)} shapes')
+        anno_ids.append([x['anno_id'] for x in test_info])
+    eval_ids = []
+    for i in range(num_max_per_shape):
+        for j in range(len(categories)):
+            if i < len(anno_ids[j]):
+                eval_ids.append(anno_ids[j][i])
+    print(f"There are {len(eval_ids)} to evaluate")
+    return eval_ids
+
+
 @torch.no_grad()
 def main():
     global console
-    console = Console()
     args = options()
+    console = Console(record=bool(args.log))
     console.print(args)
 
     data_root = Path(args.data_root).expanduser()
@@ -251,14 +308,16 @@ def main():
     get_predictor(args, print=console.print)
 
     torch.manual_seed(args.seed)
-    index = torch.randint(0, len(shapes), (args.num_shapes,))
-    console.print(f"Evaluate {len(index)} shapes of PartNet")
+    # index = torch.randint(0, len(shapes), (args.num_shapes,))
+    # console.print(f"Evaluate {len(index)} shapes of PartNet")
+    # shapes[i.item()].name
     metric = TreeSegmentMetric()
+    shapes = get_shapes(data_root, num_max_per_shape=args.num_shapes, print=print)
 
-    for i in index:
+    for shape in shapes:
         eval_one(
             args,
-            data_root.joinpath(shapes[i.item()].name),
+            data_root.joinpath(shape),
             cache_root=cache_root,
             metric=metric,
             num_views=args.num_views,
@@ -270,6 +329,8 @@ def main():
             print=console.print,
         )
         console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
+    if args.log:
+        console.save_text(args.log)
 
 
 if __name__ == '__main__':

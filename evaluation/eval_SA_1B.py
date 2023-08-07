@@ -42,6 +42,7 @@ def options():
     parser.add_argument('--log', default='log.txt', help='The filepath for log file')
     parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
     utils.add_bool_option(parser, '--force', default=False, help='Force run generate')
+    utils.add_bool_option(parser, '--uncompress', default=False, help='Donot compress the results')
     predictor_options(parser)
     args = parser.parse_args()
     return args
@@ -96,11 +97,10 @@ def main():
                 prediction.load(save_path)
             else:
                 prediction = run_predictor(image, device=device)
-
-                prediction.save(save_path)
+                prediction.save(save_path, compress=not args.uncompress)
                 time_avg.log('tree2d')
         else:
-            prediction = run_predictor(image, device=device)
+            prediction = run_predictor(image, device=device, compress=not args.uncompress)
             time_avg.log('tree2d')
         if hasattr(prediction, 'ignore_rate'):
             ignore_rate += prediction.ignore_rate

@@ -32,7 +32,7 @@ from segment_anything.utils.amg import (
 )
 from segment_anything.utils.transforms import ResizeLongestSide
 from tree_segmentation.tree_2d_segmentation import Tree2D
-from tree_segmentation.extension.utils import TimeWatcher
+from tree_segmentation.extension.utils import TimeWatcher, retry_if_cuda_oom
 
 
 # noinspection PyAttributeOutsideInit
@@ -157,10 +157,12 @@ class TreePredictor:
         in_threshold=0.80,
         in_thre_area=10,
         union_threshold=0.10,
+        ratio=0.5,
         sample_limit_fn=None,
         device=None,
         verbose=0,
         timer: TimeWatcher = None,
+        compress=True,
     ) -> Tree2D:
         assert image.shape[-1] == 3
         if timer is not None:
@@ -191,9 +193,10 @@ class TreePredictor:
             timer.log('tree', len(init_points))
         if verbose > 0:
             print('[Tree2D] complete init segmentation')
+        del data
         for step in range(max_steps):
             # points, unfilled_mask = tree_data.sample_unfilled(points_per_update, filled_threshold)
-            points = tree2d.sample_by_counts(points_per_update, sample_limit_fn)
+            points = tree2d.sample_by_counts(points_per_update, sample_limit_fn, ratio=ratio)
             if points is None:
                 break
             if timer is not None:
@@ -203,6 +206,7 @@ class TreePredictor:
                 timer.log('decode', len(points))
             num_masks += len(data['masks'])
             num_ignored += tree2d.insert_batch(data)
+            del data
             # tree_data.update_tree()
             tree2d.remove_not_in_tree()
             # tree_data.update_tree()
@@ -211,7 +215,7 @@ class TreePredictor:
             if verbose > 0:
                 print(f'[Tree2D] complete step {step} update segmentation')
         self.reset_image()
-        tree2d.post_process()
+        tree2d.post_process(compress=compress)
         if timer is not None:
             timer.log('post')
         if verbose > 0:
@@ -225,6 +229,7 @@ class TreePredictor:
         data = MaskData()
         for (points,) in batch_iterator(self.points_per_batch, points):
             batch_data = self._process_batch(points, self.original_size, normalized=normalized)
+            batch_data['masks'] = batch_data['masks'].cpu()  # to avoid oom
             data.cat(batch_data)
             del batch_data
 

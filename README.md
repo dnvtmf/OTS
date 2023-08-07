@@ -46,6 +46,21 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [x] [2D] 基于SA-1B选取超参数
 - [ ] [3D] 快速2D分割
 - [ ] [Paper] 撰写实验部分
+### 8.6 work list
+- [x] [Paper] Introduction草稿
+- [x] [3D] PartNet选用实验划分
+- [ ] [3D] PartNet使用纹理
+- [x] [3D] 新的建图方式
+
+### 8.7 work list
+- [ ] [2D] 完成2D对比实验 origin/origin_tree/0/0.5/1
+- [ ] [3D] 完成loss改进
+- [ ] [3D] PartNet开始运行
+- [ ] [Paper] 撰写相关工作
+
+### 8.8 work list
+- [ ] [3D] indoor dataset
+- [ ] [3D] outdoor dataset
 
 ### future
 - [ ] [2D] 测试automatic mask generator的结果
@@ -53,15 +68,14 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [ ] [2D] run experiment on PASCAL VOC/Cityscapes
 - [ ] [3D] 基于边的融合方法
 - [ ] [3D] add post-propocess
-- [ ] [3D] PartNet使用纹理
 - [ ] [GUI] 固定渲染颜色
 - [ ] [GUI] Edit 2D: 编辑模式
 - [ ] [GUI] Edit 2D: 右键单击显示上一层和下一层
 - [ ] [GUI] 合并save和load, 增加删除按钮
 - [ ] [3D] Tree3Dv2._get_masks 使用CUDA实现
-- [ ] [Paper] 撰写相关工作
 - [ ] [Paper] 撰写Introduction
 - [ ] [Paper] 补充材料
 - [ ] [Paper] Demo视频
 - [ ] [3D] 简化或细分Mesh
 - [ ] [3D] 合并Tree3D和Tree3Dv2
+- [ ] [2D] 使用RLE压缩Tree2D
