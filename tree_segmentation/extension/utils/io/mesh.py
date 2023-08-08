@@ -8,8 +8,9 @@ from torch import Tensor
 
 from .material import load_mtl, MTL
 
-__all__ = ['load_mesh', 'load_obj', 'load_ply', 'save_mesh', 'save_off', 'save_obj', 'save_ply', 'mesh_extensions',
-           'parse_ply']
+__all__ = [
+    'load_mesh', 'load_obj', 'load_ply', 'save_mesh', 'save_off', 'save_obj', 'save_ply', 'mesh_extensions', 'parse_ply'
+]
 
 mesh_extensions = ['.obj', '.off', '.ply']
 
@@ -28,6 +29,7 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
     Returns:
         dict: include vertices, faces, ..., materials
     """
+    # TODO: use c++ to read
     filename = Path(filename)
     texture_dir = filename.parent
 
@@ -119,14 +121,15 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
         if torch.any(f_mat.eq(-1)):
             all_materials.append(MTL('_none'))
             f_mat = torch.where(f_mat.eq(-1), torch.full_like(f_mat, len(used_materials)), f_mat)
-        outputs['f_mat'] = f_mat
-        if mtl is True:
-            outputs['materials'] = []
-            for mat_name in used_materials:
-                for mat in all_materials:
-                    if mat.name == mat_name:
-                        outputs['materials'].append(mat)
-                        break
+        used, inverse_indices = torch.unique(f_mat, return_inverse=True)
+        outputs['f_mat'] = inverse_indices
+        outputs['materials'] = []
+        for i in used:
+            mat_name = used_materials[i]
+            for mat in all_materials:
+                if mat.name == mat_name:
+                    outputs['materials'].append(mat)
+                    break
         else:
             outputs['materials'] = all_materials
     return outputs

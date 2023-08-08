@@ -12,20 +12,18 @@ from tree_segmentation.extension.utils import to_open3d_type
 class Mesh:
     attr_names = ['v_pos', 'f_pos', 'v_nrm', 'f_nrm', 'v_tex', 'f_tex', 'v_tng', 'f_tng', 'v_clr', 'material']
 
-    def __init__(
-        self,
-        v_pos: Tensor = None,
-        f_pos: Tensor = None,
-        v_nrm: Tensor = None,
-        f_nrm: Tensor = None,
-        v_tex: Tensor = None,
-        f_tex: Tensor = None,
-        v_tng: Tensor = None,
-        f_tng: Tensor = None,
-        v_clr: Tensor = None,
-        material: Material = None,
-        base: 'Mesh' = None
-    ) -> None:
+    def __init__(self,
+                 v_pos: Tensor = None,
+                 f_pos: Tensor = None,
+                 v_nrm: Tensor = None,
+                 f_nrm: Tensor = None,
+                 v_tex: Tensor = None,
+                 f_tex: Tensor = None,
+                 v_tng: Tensor = None,
+                 f_tng: Tensor = None,
+                 v_clr: Tensor = None,
+                 material: Material = None,
+                 base: 'Mesh' = None) -> None:
         pass
 
         self.v_pos = v_pos  # value of position
@@ -62,7 +60,7 @@ class Mesh:
             kwargs['f_tex'] = data['f_tex']
         if 'v_nrm' in data:
             kwargs['v_nrm'] = data['v_nrm']
-            kwargs['f_nrm'] = data['f_nrm'] if 'f_nmr' in data else data['f_pos']
+            kwargs['f_nrm'] = data['f_nrm'] if 'f_nrm' in data else data['f_pos']
         if 'v_clr' in data:
             v_clr = data['v_clr']
             if v_clr.dtype == torch.uint8:
@@ -89,15 +87,29 @@ class Mesh:
         return cls(**data)
 
     def to_open3d(self) -> o3d.geometry.TriangleMesh:
-        mesh = o3d.geometry.TriangleMesh(
-            vertices=to_open3d_type(self.v_pos),
-            triangles=to_open3d_type(self.f_pos)
-        )
+        mesh = o3d.geometry.TriangleMesh(vertices=to_open3d_type(self.v_pos), triangles=to_open3d_type(self.f_pos))
         if self.v_clr is not None:
             mesh.vertex_colors = to_open3d_type(self.v_clr)
         if self.v_nrm is not None:
             mesh.vertex_normals = to_open3d_type(self.v_nrm)
         return mesh
+
+    def check(self):
+        assert self.v_pos.ndim == 2 and self.v_pos.shape[1] == 3
+        assert self.f_pos.ndim == 2 and self.f_pos.shape[1] == 3
+        assert 0 <= self.f_pos.min() and self.f_pos.max() < len(self.v_pos)
+        if self.f_nrm is not None:
+            assert self.v_nrm.ndim == 2 and self.v_nrm.shape[1] == 3
+            assert self.f_nrm.ndim == 2 and self.f_nrm.shape[1] == 3
+            assert 0 <= self.f_nrm.min() and self.f_nrm.max() < len(self.v_nrm)
+        if self.f_tex is not None:
+            assert self.v_tex.ndim == 2 and self.v_tex.shape[1] == 2
+            assert self.f_tex.ndim == 2 and self.f_tex.shape[1] == 3
+            assert 0 <= self.f_tex.min() and self.f_tex.max() < len(self.v_tex)
+        if self.f_tng is not None:
+            assert self.v_tng.ndim == 2 and self.v_tng.shape[1] == 3
+            assert self.f_tng.ndim == 2 and self.f_tng.shape[1] == 3
+            assert 0 <= self.f_tng.min() and self.f_tng.max() < len(self.v_tng)
 
     def save(cls, filename):
         raise NotImplementedError()
@@ -195,9 +207,12 @@ class Mesh:
         """
         if self.f_tng is not None and self.v_tng is not None and not force:
             return self
-        vn_idx = [self.v_pos[self.f_pos[:, i]] for i in range(0, 3)]
-        pos = [self.v_tex[self.f_tex[:, i]] for i in range(0, 3)]
-        tex = [self.f_nrm[:, i] for i in range(0, 3)]
+        if self.v_tex is None or self.f_tex is None:
+            print('No texture vertices and/or faces')
+            return self
+        pos = [self.v_pos[self.f_pos[:, i]] for i in range(0, 3)]
+        tex = [self.v_tex[self.f_tex[:, i]] for i in range(0, 3)]
+        vn_idx = [self.f_nrm[:, i] for i in range(0, 3)]
 
         tangents = torch.zeros_like(self.v_nrm)
         tansum = torch.zeros_like(self.v_nrm)
@@ -297,6 +312,7 @@ class Mesh:
 
 
 def test():
+
     class A:
 
         def __init__(self, a=1) -> None:

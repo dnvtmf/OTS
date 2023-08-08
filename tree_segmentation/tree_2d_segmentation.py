@@ -219,7 +219,7 @@ class Tree2D(TreeStructure):
         self,
         masks: Union[MaskData, Tensor, 'Tree2D'] = None,
         scores: Tensor = None,
-        in_threshold=0.9,
+        in_threshold=0.8,
         union_threshold=0.1,
         min_area=100,
         in_thres_area=10,
@@ -352,14 +352,21 @@ class Tree2D(TreeStructure):
         super().node_replace(i, j)
         self.num_samples[i] = self.num_samples[j]
 
-    def insert(self, mask: Tensor, score=1, area=None, i: int = None, now=0) -> int:
+    def insert(self, mask: Tensor, score=1, area=None, i: int = None) -> int:
         self.uncompress()
+        if mask.device != self.device:
+            mask = mask.to(self.device)
+        if isinstance(score, Tensor):
+            score = score.item()
         if area is None:
             area = mask.sum()
         if area < self.min_area:
             if self.verbose > 1:
                 print(f'[Tree2D] ingore insert due to small area {area.item()} vs {self.min_area}')
             return -1
+        return self._insert(mask, score, area, i, 0)
+
+    def _insert(self, mask: Tensor, score=1, area=None, i: int = None, now=0) -> int:
         # print('=' * 10, i, now, f"area={area}", '=' * 10)
         # bbox_i = self['bbox'][i - 1]
         nodes_in_i = []
@@ -395,7 +402,7 @@ class Tree2D(TreeStructure):
                     # self.num_samples[i] = self.num_samples[i] * 0.5
                     return i
                 else:
-                    return self.insert(mask, score, area, i, j)
+                    return self._insert(mask, score, area, i, j)
             elif inter / area_j >= self.in_threshold:  # j in i
                 nodes_in_i.append(j)
             elif inter / union > self.union_threshold:
@@ -805,6 +812,7 @@ class Tree2D(TreeStructure):
         if keep.all():
             return
         self.node_rearrange(torch.nonzero(keep)[:, 0])
+        self.resize(self.cnt + 1)
         self.reset()
         self.update_tree()
         self.remove_not_in_tree()

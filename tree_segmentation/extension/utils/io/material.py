@@ -10,6 +10,7 @@ Reference:
 from typing import Union, List
 import re
 from pathlib import Path
+from PIL import Image
 
 import numpy as np
 
@@ -70,9 +71,11 @@ class MTL:
         ext = texture_file.suffix
 
         def _load_image(file) -> np.ndarray:
-            image = load_image(file)
+            # image = load_image(file)
+            image = np.array(Image.open(file).convert('RGB'))
             if image.dtype == np.uint8:
                 image = image.astype(np.float32) / 255.
+            # print('MTL load image:', image.shape)
             return image
 
         if texture_file.with_name(filename + '_0' + ext).exists():

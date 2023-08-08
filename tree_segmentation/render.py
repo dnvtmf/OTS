@@ -10,13 +10,14 @@ dr.set_log_level(2)
 
 @torch.no_grad()
 def render_mesh(
-    glctx,
-    mesh: Mesh,
-    Tw2v: Tensor = None,
-    Tw2c: Tensor = None,
-    fovy=math.radians(60),
-    image_size=1024,
-    light_location=(0, 2., 0.)
+        glctx,
+        mesh: Mesh,
+        Tw2v: Tensor = None,
+        Tw2c: Tensor = None,
+        fovy=math.radians(60),
+        image_size=1024,
+        light_location=(0, 2., 0.),
+        background=1.,
 ):
     device = mesh.v_pos.device
     camera_pos = Tw2v.inverse()[..., :3, 3]
@@ -31,8 +32,7 @@ def render_mesh(
         ambient_color=utils.n_tuple(0.5, 3),
         diffuse_color=utils.n_tuple(1., 3),
         specular_color=utils.n_tuple(0.3, 3),
-        device=device
-    )
+        device=device)
     lights.location = camera_pos
     if Tw2c is None:
         if Tw2v is not None:
@@ -57,8 +57,9 @@ def render_mesh(
             ka, kd, ks = nrm.new_full((3,), 0.2), nrm.new_full((3,), 0.5), nrm.new_full((3,), 0.1)
         points, _ = dr.interpolate(mesh.v_pos[None].float(), rast, mesh.f_pos.int())
         images = ops_3d.Blinn_Phong(nrm, lights(points), view_direction, (ka, kd, ks))
+        # images = ops_3d.Blinn_Phong_abs(nrm, lights(points), view_direction, (ka, kd, ks))
     images = dr.antialias(images, rast, v_pos, mesh.f_pos.int()).clamp(0, 1)
-    images = torch.where(rast[..., -1:] > 0, images, torch.ones_like(images))
+    images = torch.where(rast[..., -1:] > 0, images, torch.full_like(images, background))
     if Tw2c.ndim == 2:
         return images[0, :, :, :3], rast[0, :, :, -1].int()
     else:

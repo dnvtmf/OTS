@@ -49,20 +49,26 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 ### 8.6 work list
 - [x] [Paper] Introduction草稿
 - [x] [3D] PartNet选用实验划分
-- [ ] [3D] PartNet使用纹理
 - [x] [3D] 新的建图方式
 
 ### 8.7 work list
-- [ ] [2D] 完成2D对比实验 origin/origin_tree/0/0.5/1
-- [ ] [3D] 完成loss改进
-- [ ] [3D] PartNet开始运行
-- [ ] [Paper] 撰写相关工作
+- [x] [2D] 完成2D对比实验 origin
+- [x] [3D] 完成loss改进
+- [ ] [3D] PartNet gt_seg
 
 ### 8.8 work list
+- [ ] [3D] PartNet gt_seg
+- [ ] [2D] 完成2D对比实验 origin_tree
+- [ ] [2D] 完成2D对比实验 0.5
 - [ ] [3D] indoor dataset
 - [ ] [3D] outdoor dataset
+- [ ] [3D] 室外场景
+- [ ] [Paper] 撰写相关工作
+- [ ] [3D] PartNet使用纹理
 
 ### future
+- [ ] [2D] 完成2D对比实验 0
+- [ ] [2D] 完成2D对比实验 1.0
 - [ ] [2D] 测试automatic mask generator的结果
 - [ ] [2D] metric set ignore nodes
 - [ ] [2D] run experiment on PASCAL VOC/Cityscapes

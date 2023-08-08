@@ -27,7 +27,7 @@ def read_annotations(json_path: Path, image_size=None):
         masks.append(mask)
     scores = np.stack(scores)
     masks = np.stack(masks)
-    tree2d = Tree2D(MaskData(masks=torch.from_numpy(masks), iou_preds=torch.from_numpy(scores)))
+    tree2d = Tree2D(MaskData(masks=torch.from_numpy(masks), iou_preds=torch.from_numpy(scores)), min_area=0)
     tree2d.update_tree()
     return tree2d
 
@@ -35,11 +35,12 @@ def read_annotations(json_path: Path, image_size=None):
 def options():
     parser = argparse.ArgumentParser('Tree Segmentation for SA-1B dataset')
     parser.add_argument('-o', '--output', default=None, help='The directory to cache tree2d results')
+    parser.add_argument('--suffix', default='', help='store result *.tree2d in <output>/<suffix>')
     parser.add_argument('--data-root', default='/data5/SA-1B', help="The root path of SA-1B dataset")
     parser.add_argument('--seed', default=42, type=int, help='The seed to random choose evaluation images')
     parser.add_argument('-n', '--number', default=1000, type=int, help='The number of images to evaluate')
     parser.add_argument('--eval-part', default=110, type=int, help='The part index of SA-1B to evaluate')
-    parser.add_argument('--log', default='log.txt', help='The filepath for log file')
+    parser.add_argument('--log', default='log.txt', help='The filename for log file')
     parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
     utils.add_bool_option(parser, '--force', default=False, help='Force run generate')
     utils.add_bool_option(parser, '--uncompress', default=False, help='Donot compress the results')
@@ -57,9 +58,18 @@ def main():
     if args.output is not None:
         save_root = Path(args.output).expanduser()
         save_root.mkdir(exist_ok=True, parents=True)
-        console.print(f'[red]Try to save 2D Tree Segmentation Results in: {save_root}')
+        save_dir = save_root.joinpath(args.suffix)
+        save_gt_dir = save_root.joinpath('gt')
+        save_dir.mkdir(exist_ok=True)
+        save_gt_dir.mkdir(exist_ok=True)
+        console.print(f'[red]The save root: {save_root}')
+        console.print(f'[red]Save 2D Tree Segmentation Results in: {save_dir}')
+        console.print(f'[red]Save GT in: {save_gt_dir}')
+
     else:
         save_root = None
+        save_dir = None
+        save_gt_dir = None
 
     data_root = Path(args.data_root).joinpath(f"{args.eval_part:06d}").expanduser()
     images_paths = sorted(list(data_root.glob('*.jpg')))
@@ -88,10 +98,16 @@ def main():
         scale = min(args.image_size / H, args.image_size / W)
         image = cv2.resize(image, (int(scale * W), int(scale * H)), interpolation=cv2.INTER_AREA)
         time_avg.log('image')
-        gt = read_annotations(image_path.with_suffix('.json'), image_size=(image.shape[1], image.shape[0]))
+        if save_gt_dir is not None and save_gt_dir.joinpath(image_path.name).with_suffix('.tree2d').exists():
+            gt = Tree2D(device=device)
+            gt.load(save_gt_dir.joinpath(image_path.name).with_suffix('.tree2d'))
+        else:
+            gt = read_annotations(image_path.with_suffix('.json'), image_size=(image.shape[1], image.shape[0]))
+            if save_gt_dir is not None:
+                gt.save(save_gt_dir.joinpath(image_path.name).with_suffix('.tree2d'))
         time_avg.log('gt')
-        if save_root is not None:
-            save_path = save_root.joinpath(image_path.name).with_suffix('.tree2d')
+        if save_dir is not None:
+            save_path = save_dir.joinpath(image_path.name).with_suffix('.tree2d')
             if save_path.exists() and not args.force:
                 prediction = Tree2D(device=device)
                 prediction.load(save_path)
@@ -120,7 +136,7 @@ def main():
         console.print(f"{k:5s}: {v}")
     console.print('average masks:', np.mean(num_masks))
     console.print('ignore rate:', ignore_rate / max(1, num_count))
-    console.save_text(args.log)
+    console.save_text(save_dir.joinpath(args.log))
 
 
 if __name__ == '__main__':

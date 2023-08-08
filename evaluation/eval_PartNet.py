@@ -170,6 +170,9 @@ def eval_one(
     else:
         mesh, gt = get_mesh_and_gt_tree(example, cache_dir)
 
+    if len(gt.masks) == 0 or len(gt.masks) >= 200:
+        return
+
     if use_gt_2d:
         images, tri_ids, Tw2vs = get_images(mesh, image_size=1024, num_views=num_views, seed=42)
     elif force_2d or len(list(cache_dir.glob(f"view_*.data"))) < num_views:
@@ -184,7 +187,8 @@ def eval_one(
         tree3d.load(save_path)
     else:
         if use_gt_2d:
-            tree3d.build_gt_segmentation(gt, tri_ids.cuda())
+            if not tree3d.build_gt_segmentation(gt, tri_ids.cuda()):
+                return
         else:
             tree3d.load_2d_results(cache_dir)
         gt.to(torch.device('cpu'))
@@ -270,7 +274,33 @@ def options():
 def get_shapes(root: Path, num_max_per_shape=100, print=print):
     ins_seg_root = root.joinpath('../ins_seg_h5').resolve()
     print('Dataset split root:', ins_seg_root)
-    categories = os.listdir(ins_seg_root)
+    # categories = os.listdir(ins_seg_root)
+    categories = [
+        # 'Bag',
+        'Bed',
+        # 'Bottle',
+        # 'Bowl',
+        'Chair',
+        'Clock',
+        'Dishwasher',
+        'Display',
+        'Door',
+        'Earphone',
+        'Faucet',
+        # 'Hat',
+        # 'Keyboard',
+        'Knife',
+        'Lamp',
+        # 'Laptop',
+        'Microwave',
+        # 'Mug',
+        'Refrigerator',
+        # 'Scissors',
+        'StorageFurniture',
+        'Table',
+        # 'TrashCan',
+        # 'Vase',
+    ]
     print('The number of categories:', len(categories))
     anno_ids = []
     for cat in categories:

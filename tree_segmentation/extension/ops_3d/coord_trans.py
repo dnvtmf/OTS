@@ -1,7 +1,7 @@
 """ coordinate transformation 三维坐标变换
 
 世界空间World space和观察空间view space为右手系(OpenGL坐标系)，+x向右手边, +y指向上方, +z指向屏幕外
-裁剪空间Clip space为左手系: +1指向右手边, +y 指向上方, +z指向屏幕内; z 的坐标值越小，距离观察者越近
+裁剪空间Clip space为左手系: +x指向右手边, +y 指向上方, +z指向屏幕内; z 的坐标值越小，距离观察者越近
 屏幕坐标系： X 轴向右为正，Y 轴向下为正，坐标原点位于窗口的左上角 (左手系: z轴向屏幕内，表示深度)
 
 坐标变换矩阵: T{s}2{d} Transform from {s} space to {d} space

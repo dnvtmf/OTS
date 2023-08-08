@@ -704,7 +704,7 @@ class Tree3Dv2(TreeStructure):
                     temp[0] = 0
                     self.M += 1
                     if pack:
-                        mask_2d[temp >= 0.5] = self.M
+                        mask_2d[temp >= 0.5] = self.M  # FIXME: may area = 0
                         indices_2d.append(len(masks_2d))
                     else:
                         masks_2d.append(temp.clone())
@@ -771,8 +771,6 @@ class Tree3Dv2(TreeStructure):
             v_faces, v_cnts = tri_id.unique(return_counts=True)
             if v_faces[0] == 0:
                 v_faces, v_cnts = v_faces[1:], v_cnts[1:]
-            self.view_infos.append((v_faces, v_cnts))
-            self.masks_view[vid, v_faces] = 1  # v_cnts.float()
             masks_2d = []
             for i in range(gt_tree.cnt):
                 mask = gt_tree.masks[i, tri_id]
@@ -787,10 +785,17 @@ class Tree3Dv2(TreeStructure):
                 temp[0] = 0
                 face_masks.append(temp.clone())
             num_masks_vid = len(masks_2d)
+            if num_masks_vid == 0:
+                continue
+            self.view_infos.append((v_faces, v_cnts))
+            self.masks_view[vid, v_faces] = 1  # v_cnts.float()
             num_masks.append(num_masks_vid)
             # gt_masks.append(torch.stack(masks_2d, dim=0).cpu())
             self.range_view.append((len(view_indices), len(view_indices) + num_masks_vid))
             view_indices.extend([vid] * num_masks_vid)
+        if len(face_masks) == 0:
+            print(f"Can not load gt, due there is no masks")
+            return False
         self.masks_2d = torch.stack(face_masks, dim=0)
         self._masks_2d_sp = None
         self.indices_view = torch.tensor(view_indices, dtype=torch.int32, device=self.device)
@@ -799,38 +804,51 @@ class Tree3Dv2(TreeStructure):
         self.Lmax = max(x for x in num_masks)
         print(f'[Tree3D] view_masks, view_infos[0]: {utils.show_shape(self.masks_view, self.view_infos[0])}')
         print(f"[Tree3D] loaded {self.V} views, {self.M} masks, max_num: {self.Lmax}")
-        return
+        return True
 
     def reverse_masks_2d_pack(self, device=None, threshold=0.9):
         if device is None:
             device = self.device
         if self._masks_2d_packed:
-            masks_2d = torch.zeros((self.M + 1, self.num_faces + 1), device=device)
-            indices = torch.arange(self.num_faces + 1, device=device)
-            for i in range(len(self.masks_2d)):
-                masks_2d[self.masks_2d[i].to(device), indices] = 1
             self._masks_2d_sp = None
-            self.masks_2d = None
-            self.masks_2d = masks_2d.to(self.device)
             self.indices_2d = None
+            masks_2d = torch.zeros((self.M, self.num_faces + 1), dtype=torch.float, device=device)
+            # indices = torch.arange(self.num_faces + 1, device=device)
+            # for i in range(len(self.masks_2d)):
+            #     masks_2d[self.masks_2d[i].to(device), indices] = 1
+            # masks_2d = masks_2d[1:]
+            print(self.masks_2d.shape, masks_2d.shape, len(self.range_level))
+            for i in range(len(self.masks_2d)):
+                for j in range(*self.range_2d[i]):
+                    masks_2d[j] = self.masks_2d[i] == (j + 1)
+            self.masks_2d = None
+            self.range_level = []
+            self.range_2d = []
+            self.masks_2d = masks_2d.to(self.device)
             self._masks_2d_packed = False
         else:
             self._masks_2d_sp = self.masks_2d.to_sparse_coo()
             masks_2d = []
             self.indices_2d = torch.zeros(self.M, device=self.device)
             self.range_level = []
+            self.range_2d = []
             for v in range(self.V):
                 sl = len(masks_2d)
-                masks_2d.append(torch.zeros(self.num_faces + 1, dtype=torch.bool, device=device))
-                for i in range(*self.range_view[v]):
+                masks_2d.append(torch.zeros(self.num_faces + 1, dtype=torch.int, device=device))
+                s, e = self.range_view[v]
+                self.range_2d.append((s, s + 1))
+                for i in range(s, e):
                     mask = self.masks_2d[i] >= 0.5
-                    if ((mask & (masks_2d[-1] > 0)).sum() / mask.sum()) >= threshold:
+                    num = mask.sum()
+                    if num == 0 or ((mask & (masks_2d[-1] == 0)).sum() / num) >= threshold:
                         masks_2d[-1][mask] = i + 1
+                        self.range_2d[-1] = (self.range_2d[-1][0], i + 1)
                     else:
-                        masks_2d.append(mask)
+                        masks_2d.append(mask.int() * (i + 1))
+                        self.range_2d.append((i, i + 1))
                     self.indices_2d[i] = len(masks_2d) - 1
-                self.masks_2d = torch.stack(masks_2d).to(self.device)
-                self.range_level.append(sl, len(masks_2d))
+                self.range_level.append((sl, len(masks_2d)))
+            self.masks_2d = torch.stack(masks_2d).to(self.device)
             self._masks_2d_packed = True
 
     def build_view_graph(self, threshold=0.5, num_nearest=5):
@@ -856,9 +874,9 @@ class Tree3Dv2(TreeStructure):
         # view_graph = self.build_view_graph()
         if view_graph is None:
             view_graph = torch.ones((self.V, self.V), device=self.device, dtype=torch.bool)
-        M = self.M + 1
-        area = torch.zeros(M, device=self.device)
         if self._masks_2d_packed:
+            M = self.M + 1
+            area = torch.zeros(M, device=self.device)
             A = torch.zeros((M, M), device=self.device, dtype=torch.float)
             for i in range(len(self.masks_2d)):
                 xi, yi = self.range_2d[i][0] + 1, self.range_2d[i][1] + 1
@@ -918,14 +936,16 @@ class Tree3Dv2(TreeStructure):
         A[self.M:, self.M:] = self.build_view_graph(threshold, num_nearest)
         # view-mask
         if self._masks_2d_packed:
-            #  TODO: check
-            areas_m = scatter(self.area, self.masks_2d)
+            areas_m = torch.zeros((self.M + 1), device=self.device)
+            for i in range(len(self.masks_2d)):
+                areas_m.scatter_reduce_(0, self.masks_2d[i, 1:].long(), self.area, 'sum')
             temp = torch.zeros((self.M + 1), device=self.device)
             for i in range(self.V):
                 masks_2d = self.masks_2d * self.masks_view[i]
-                for j in range(self.M):
-                    temp.scatter_reduce_(0, masks_2d[j], self.area, 'sum')
-                A[:, M + i] = temp[1:] / areas_m.clamp_min(1e-7)
+                temp.zero_()
+                for j in range(len(masks_2d)):
+                    temp.scatter_reduce_(0, masks_2d[j, 1:].long(), self.area, 'sum')
+                A[:M, M + i] = temp[1:] / areas_m[1:].clamp_min(1e-7)
         else:
             areas_m = torch.mv(self.masks_2d[:, 1:], self.area)[:, None].clamp_min(1e-7)
             A[:M, M:] = F.linear(self.masks_2d[:, 1:], self.masks_view[:, 1:].float() * self.area) / areas_m
