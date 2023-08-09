@@ -106,24 +106,35 @@ def main():
             if save_gt_dir is not None:
                 gt.save(save_gt_dir.joinpath(image_path.name).with_suffix('.tree2d'))
         time_avg.log('gt')
-        if save_dir is not None:
-            save_path = save_dir.joinpath(image_path.name).with_suffix('.tree2d')
-            if save_path.exists() and not args.force:
-                prediction = Tree2D(device=device)
-                prediction.load(save_path)
+        try:
+            if save_dir is not None:
+                save_path = save_dir.joinpath(image_path.name).with_suffix('.tree2d')
+                if save_path.exists() and not args.force:
+                    prediction = Tree2D(device=device)
+                    prediction.load(save_path)
+                else:
+                    prediction = run_predictor(image, device=device)
+                    prediction.save(save_path, compress=not args.uncompress)
+                    time_avg.log('tree2d')
             else:
-                prediction = run_predictor(image, device=device)
-                prediction.save(save_path, compress=not args.uncompress)
+                prediction = run_predictor(image, device=device, compress=not args.uncompress)
                 time_avg.log('tree2d')
-        else:
-            prediction = run_predictor(image, device=device, compress=not args.uncompress)
-            time_avg.log('tree2d')
-        if hasattr(prediction, 'ignore_rate'):
-            ignore_rate += prediction.ignore_rate
-            num_count += 1
-        num_masks.append(prediction.num_masks)
-        metric.update(prediction, gt.to(device), return_match=False)
-        del prediction, gt
+
+            # prediction.uncompress()
+            # prediction.reset()
+            # prediction.update_tree()
+            # prediction.remove_not_in_tree()
+            if hasattr(prediction, 'ignore_rate'):
+                ignore_rate += prediction.ignore_rate
+                num_count += 1
+            num_masks.append(prediction.num_masks)
+            metric.update(prediction, gt.to(device), return_match=False)
+            del prediction, gt
+        except RuntimeError as e:
+            if "CUDA out of memory. " in str(e):
+                torch.cuda.empty_cache()
+            else:
+                raise
         time_avg.log('metric')
         timer.step()
         if i % args.print_interval == 0:

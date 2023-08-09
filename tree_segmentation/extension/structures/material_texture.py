@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import List
+from typing import List, Sequence, Iterable, Union
 
 import numpy as np
 import nvdiffrast.torch as dr
@@ -9,8 +9,12 @@ from torch import Tensor, nn
 
 from tree_segmentation.extension.ops_3d.misc import normalize
 from tree_segmentation.extension.utils.io.image import (
-    avg_pool_nhwc, load_image, rgb_to_srgb, save_image,
-    scale_img_nhwc, srgb_to_rgb,
+    avg_pool_nhwc,
+    load_image,
+    rgb_to_srgb,
+    save_image,
+    scale_img_nhwc,
+    srgb_to_rgb,
 )
 from tree_segmentation.extension.utils.io.material import MTL
 
@@ -53,7 +57,12 @@ class Material(nn.Module):
 
         def _deal(v, m):
             v = torch.from_numpy(v) if v is not None else 1.
-            return v * m[..., :3] if m is not None else v
+            if m is not None:
+                m = torch.from_numpy(m)
+                m = m[:, :, None].repeat(1, 1, 3) if m.ndim == 2 else m[:, :, :3]
+                assert m.ndim == 3, f"{m.shape}"
+                return v * m[..., :3] if m is not None else v
+            return v
 
         mat['ka'] = Texture2D(_deal(mtl.Ka, mtl.map_Ka))
         mat['kd'] = Texture2D(_deal(mtl.Kd, mtl.map_Kd))
@@ -67,6 +76,34 @@ class Material(nn.Module):
             # Override ORM occlusion (red) channel by zeros. We hijack this channel
             for mip in mat['ks'].getMips():
                 mip[..., 0] = 0.0
+        return mat
+
+    @classmethod
+    @torch.no_grad()
+    def from_mtls(cls, mtls: Sequence[MTL], clear_ks=False):
+
+        def _deal(v, m) -> Tensor:
+            v = torch.from_numpy(v)
+            if m is not None:
+                m = torch.from_numpy(m)
+                m = m[:, :, None].repeat(1, 1, 3) if m.ndim == 2 else m[:, :, :3]
+                assert m.ndim == 3, f"{m.shape}"
+                return v * m[..., :3] if m is not None else v
+            assert v.shape == (3,)
+            return v[None, None, :]
+
+        mat = Material({'names': [mtl.name for mtl in mtls]})
+        mat['ka'] = MultiTexture2D(_deal(mtl.Ka, mtl.map_Ka) for mtl in mtls)
+        mat['kd'] = MultiTexture2D(_deal(mtl.Kd, mtl.map_Kd) for mtl in mtls)
+        mat['ks'] = MultiTexture2D(_deal(mtl.Ks, mtl.map_Ks) for mtl in mtls)
+        if any(mtl.bump is not None for mtl in mtls):
+            bumps = []
+            for mtl in mtls:
+                if mtls.bumps is None:
+                    bumps.append(torch.zeros(1, 1, 3))
+                else:
+                    bumps.append(torch.from_numpy(mtl.bump[..., :3] * 2 - 1.))
+            mat['normal'] = MultiTexture2D(*bumps)
         return mat
 
     @classmethod
@@ -122,6 +159,7 @@ class Material(nn.Module):
 
     @torch.no_grad()
     def save(self, filename):
+        # TODO: implent save MultiText2D
         folder = os.path.dirname(filename)
         with open(filename, "w") as f:
             f.write('newmtl defaultMat\n')
@@ -142,6 +180,45 @@ class Material(nn.Module):
                 f.write('Tf 1 1 1\n')
                 f.write('Ni 1\n')
                 f.write('Ns 0\n')
+
+
+class MultiTexture2D(nn.Module):
+
+    def __init__(self, *textures: Union[Tensor, Iterable]):
+        super().__init__()
+        if len(textures) > 1:
+            self.textures = list(textures)
+        elif len(textures) == 1:
+            if isinstance(textures[0], Tensor):
+                self.textures = [textures[0]]
+            else:
+                self.textures = list(textures[0])
+        else:
+            raise ValueError(f"at least one Tensor")
+        assert all(isinstance(tex, Tensor) for tex in self.textures), f"{[type(tex) for tex in self.textures]}"
+        self.textures = [tex.float() for tex in self.textures]
+        self.num = len(self.textures)
+
+    def __len__(self):
+        return self.num
+
+    def forward(self, uv: Tensor, uv_da: Tensor = None, f_mat: Tensor = None, **kwargs):
+        return self.sample(uv=uv, uv_da=uv_da, f_mat=f_mat, **kwargs)
+
+    def sample(self, uv: Tensor, uv_da: Tensor = None, f_mat: Tensor = None, **kwargs):
+        assert f_mat is not None, f_mat.ndim == 3
+        textures = []
+        for i in range(self.num):
+            textures.append(dr.texture(self.textures[i][None], uv, uv_da, **kwargs))
+        textures = torch.stack([torch.zeros_like(textures[0])] + textures)
+        # assert 0 <= f_mat.min() and f_mat.max() <= self.num
+        textures = torch.gather(textures, 0, f_mat[..., None].expand_as(textures[0])[None])[0]
+        return textures
+
+    def _apply(self, fn):
+        for i in range(self.num):
+            self.textures[i] = fn(self.textures[i])
+        return super()._apply(fn)
 
 
 class Texture2D(nn.Module):
@@ -174,18 +251,21 @@ class Texture2D(nn.Module):
 
         self.min_max = min_max
 
+    def forward(self, uv: Tensor, uv_da: Tensor = None, f_mat: Tensor = None, **kwargs):
+        return self.sample(uv=uv, uv_da=uv_da, f_mat=f_mat, **kwargs)
+
     # Filtered (trilinear) sample texture at a given location
-    def sample(self, texc, texc_deriv, filter_mode='linear-mipmap-linear'):
+    def sample(self, uv: Tensor, uv_da: Tensor = None, f_mat=None, filter_mode='auto', **kwargs) -> Tensor:
         if isinstance(self.data, list):
-            out = dr.texture(self.data[0], texc, texc_deriv, mip=self.data[1:], filter_mode=filter_mode)
+            out = dr.texture(self.data[0], uv, uv_da, mip=self.data[1:], filter_mode=filter_mode)
         else:
             if self.data.shape[1] > 1 and self.data.shape[2] > 1:
                 mips = [self.data]
                 while mips[-1].shape[1] > 1 and mips[-1].shape[2] > 1:
                     mips += [texture2d_mip.apply(mips[-1])]
-                out = dr.texture(mips[0], texc, texc_deriv, mip=mips[1:], filter_mode=filter_mode)
+                out = dr.texture(mips[0], uv, uv_da, mip=mips[1:], filter_mode=filter_mode)
             else:
-                out = dr.texture(self.data, texc, texc_deriv, filter_mode=filter_mode)
+                out = dr.texture(self.data, uv, uv_da, filter_mode=filter_mode)
         return out
 
     @property
@@ -271,6 +351,7 @@ class Texture2D(nn.Module):
 
     @classmethod
     def load(cls, filename, lambda_fn=None, channels=None):
+
         def _load_mip2D(fn, lambda_fn=None, channels=None):
             image = load_image(fn)
             if image.dtype != np.float32:
@@ -293,6 +374,7 @@ class Texture2D(nn.Module):
 
     @torch.no_grad()
     def save(self, filename, lambda_fn=None):
+
         def _save_mip2D(fn: Path, mip, mipidx=None, lambda_fn=None):
             data = (mip if lambda_fn is None else lambda_fn(mip)).detach().cpu().numpy()
             save_image(fn.with_name(f"{fn.stem}{'' if mipidx is None else f'_{mipidx:d}'}{fn.suffix}"), data)
@@ -318,8 +400,7 @@ class texture2d_mip(torch.autograd.Function):
         gy, gx = torch.meshgrid(
             torch.linspace(0.0 + 0.25 / dout.shape[1], 1.0 - 0.25 / dout.shape[1], dout.shape[1] * 2, device="cuda"),
             torch.linspace(0.0 + 0.25 / dout.shape[2], 1.0 - 0.25 / dout.shape[2], dout.shape[2] * 2, device="cuda"),
-            indexing='ij'
-        )
+            indexing='ij')
         uv = torch.stack((gx, gy), dim=-1)
         return dr.texture(dout * 0.25, uv[None, ...].contiguous(), filter_mode='linear', boundary_mode='clamp')
 
@@ -336,7 +417,9 @@ def _upscale_replicate(x, full_res):
 
 
 def merge_materials(materials: List[Material], v_tex: Tensor, f_tex: Tensor, f_mat: Tensor, mode='wrap', eps=0.01):
-    """ 合并多个Material
+    """ 合并多个Material, 将所有texture缩放到统一大小, 并水平拼接
+    
+    当出现重复性纹理, 即 v_tex < 0 or v_tex > 1 时, 会产生错误
 
     Args:
         materials: 材质Material列表
@@ -350,10 +433,11 @@ def merge_materials(materials: List[Material], v_tex: Tensor, f_tex: Tensor, f_m
         Material, Tensor, Tensor: 合并后的材质, 新的纹理坐标, 新的纹理面片
     """
     assert len(materials) > 0
+    assert 0 <= f_mat.min() and f_mat.max() < len(materials)
     for mat in materials:
         assert mat['bsdf'] == materials[0]['bsdf'], "All materials must have the same BSDF (uber shader)"
-        assert ('normal'
-                in mat) is ('normal' in materials[0]), "All materials must have either normal map enabled or disabled"
+        assert ('normal' in mat) is ('normal'
+                                     in materials[0]), "All materials must have either normal map enabled or disabled"
 
     uber_material = Material({
         'name': 'uber_material',
@@ -370,7 +454,8 @@ def merge_materials(materials: List[Material], v_tex: Tensor, f_tex: Tensor, f_m
             max_res = np.maximum(max_res, tex_res) if max_res is not None else tex_res
 
     # Compute size of compund texture and round up to nearest PoT
-    full_res = 2 ** np.ceil(np.log2(max_res * np.array([1, len(materials)]))).astype(np.int32)
+    max_res = 2**np.ceil(np.log2(max_res)).astype(np.int32)
+    full_res = 2**np.ceil(np.log2(max_res * np.array([1, len(materials)]))).astype(np.int32)
 
     # Normalize texture resolution across all materials & combine into a single large texture
     for tex in textures:
@@ -393,5 +478,9 @@ def merge_materials(materials: List[Material], v_tex: Tensor, f_tex: Tensor, f_m
     v_tex = v_tex.clamp(eps, 1. - eps)
     output, new_f_tex = torch.unique(f_tex + f_mat[:, None] * v_tex.shape[0], return_inverse=True)
     new_v_tex = v_tex[output % v_tex.shape[0], :]
-    new_v_tex[:, 0] = (new_v_tex[:, 0] + output // v_tex.shape[0]) * (max_res[1] / full_res[1])
+    mat_idx = output // v_tex.shape[0]
+    x_start = torch.arange(len(materials), device=v_tex.device) * max_res[1] / full_res[1]
+    x_end = (torch.arange(len(materials), device=v_tex.device) + 1) * max_res[1] / full_res[1]
+    x_scale = x_end - x_start
+    new_v_tex[:, 0] = new_v_tex[:, 0] * x_scale[mat_idx] + x_start[mat_idx]
     return uber_material, new_v_tex, new_f_tex

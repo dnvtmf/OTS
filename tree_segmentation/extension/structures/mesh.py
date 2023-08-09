@@ -5,27 +5,28 @@ import open3d as o3d
 
 from tree_segmentation.extension.ops_3d.misc import dot, normalize
 from tree_segmentation.extension.utils.io.mesh import load_mesh
-from tree_segmentation.extension.structures.material_texture import Material, merge_materials
+from tree_segmentation.extension.structures.material_texture import Material, merge_materials, MultiTexture2D
 from tree_segmentation.extension.utils import to_open3d_type
 
 
 class Mesh:
-    attr_names = ['v_pos', 'f_pos', 'v_nrm', 'f_nrm', 'v_tex', 'f_tex', 'v_tng', 'f_tng', 'v_clr', 'material']
+    attr_names = ['v_pos', 'f_pos', 'v_nrm', 'f_nrm', 'v_tex', 'f_tex', 'v_tng', 'f_tng', 'v_clr', 'f_mat', 'material']
 
-    def __init__(self,
-                 v_pos: Tensor = None,
-                 f_pos: Tensor = None,
-                 v_nrm: Tensor = None,
-                 f_nrm: Tensor = None,
-                 v_tex: Tensor = None,
-                 f_tex: Tensor = None,
-                 v_tng: Tensor = None,
-                 f_tng: Tensor = None,
-                 v_clr: Tensor = None,
-                 material: Material = None,
-                 base: 'Mesh' = None) -> None:
-        pass
-
+    def __init__(
+        self,
+        v_pos: Tensor = None,
+        f_pos: Tensor = None,
+        v_nrm: Tensor = None,
+        f_nrm: Tensor = None,
+        v_tex: Tensor = None,
+        f_tex: Tensor = None,
+        v_tng: Tensor = None,
+        f_tng: Tensor = None,
+        v_clr: Tensor = None,
+        f_mat: Tensor = None,
+        material: Material = None,
+        base: 'Mesh' = None,
+    ):
         self.v_pos = v_pos  # value of position
         self.v_nrm = v_nrm  # value of vertices normal
         self.v_tex = v_tex  # value of texture
@@ -35,25 +36,29 @@ class Mesh:
         self.f_nrm = f_nrm  # faces of normal
         self.f_tex = f_tex  # faces of texture
         self.f_tng = f_tng  # faces of tangents
+        self.f_mat = f_mat  # indices of texures
         self.material = material
 
         if base is not None:
             self.copy_none(base)
 
     @classmethod
-    def load(cls, filename, mtl=True) -> 'Mesh':
+    def load(cls, filename, mtl=True, merge_mtl=False) -> 'Mesh':
         data = load_mesh(filename, mtl=mtl, loader='my')
         # from tree_segmentation.extension.utils import show_shape
         # print(show_shape(data))
         kwargs = {'v_pos': data['v_pos'], 'f_pos': data['f_pos']}
         if mtl and 'materials' in data and len(data['materials']) > 0:
-            if len(data['materials']) > 1:
+            if len(data['materials']) == 1:
+                material = Material.from_mtl(data['materials'][0])
+            elif merge_mtl:
                 mtls = [Material.from_mtl(mtl) for mtl in data['materials']]
                 material, v_tex, f_tex = merge_materials(mtls, data['v_tex'], data['f_tex'], data['f_mat'])
                 data['v_tex'] = v_tex
                 data['f_tex'] = f_tex
             else:
-                material = Material.from_mtl(data['materials'][0])
+                kwargs['f_mat'] = data['f_mat']
+                material = Material.from_mtls(data['materials'])
             kwargs['material'] = material
         if 'v_tex' in data:
             kwargs['v_tex'] = data['v_tex']
@@ -94,6 +99,16 @@ class Mesh:
             mesh.vertex_normals = to_open3d_type(self.v_nrm)
         return mesh
 
+    def to_trimesh(self):
+        import trimesh
+        return trimesh.Trimesh(
+            vertices=self.v_pos.cpu().numpy(),
+            faces=self.f_pos.cpu().numpy(),
+            # face_normals=self.f_nrm.cpu().numpy() if self.f_nrm is not None else None,
+            # vertex_normals=self.v_nrm.cpu().numpy() if self.f_nrm is not None else None,
+            vertex_colors=self.v_clr.cpu().numpy() if self.v_clr is not None else None,
+        )
+
     def check(self):
         assert self.v_pos.ndim == 2 and self.v_pos.shape[1] == 3
         assert self.f_pos.ndim == 2 and self.f_pos.shape[1] == 3
@@ -110,6 +125,12 @@ class Mesh:
             assert self.v_tng.ndim == 2 and self.v_tng.shape[1] == 3
             assert self.f_tng.ndim == 2 and self.f_tng.shape[1] == 3
             assert 0 <= self.f_tng.min() and self.f_tng.max() < len(self.v_tng)
+        if self.material is not None:
+            for k in self.material.keys():
+                if isinstance(self.material[k], MultiTexture2D):
+                    assert self.f_mat is not None
+                    assert self.f_mat.ndim == 1 and self.f_mat.shape[0] == self.f_pos.shape[0]
+                    assert 0 <= self.f_mat.min() and self.f_mat.max() < len(self.material[k])
 
     def save(cls, filename):
         raise NotImplementedError()
@@ -122,7 +143,7 @@ class Mesh:
 
     def clone(self):
         kwargs = {'material': self.material}
-        for attr in ['v_pos', 'f_pos', 'v_nrm', 'f_nrm', 'v_tex', 'f_tex', 'v_tng', 'f_tng']:
+        for attr in ['v_pos', 'f_pos', 'v_nrm', 'f_nrm', 'v_tex', 'f_tex', 'v_tng', 'f_tng', 'v_clr', 'f_mat']:
             v = getattr(self, attr)
             if v is not None:
                 kwargs[attr] = v.clone().detach()
@@ -142,14 +163,14 @@ class Mesh:
         return self.to('cpu')
 
     def int(self):
-        for attr in ['f_pos', 'f_nrm', 'f_tex', 'f_tng']:
+        for attr in ['f_pos', 'f_nrm', 'f_tex', 'f_tng', 'f_mat']:
             v = getattr(self, attr)
             if v is not None:
                 v.int()
         return self
 
     def long(self):
-        for attr in ['f_pos', 'f_nrm', 'f_tex', 'f_tng']:
+        for attr in ['f_pos', 'f_nrm', 'f_tex', 'f_tng', 'f_mat']:
             v = getattr(self, attr)
             if v is not None:
                 v.long()
@@ -287,12 +308,13 @@ class Mesh:
             None if self.v_tex is None else 'tex',
             None if self.v_nrm is None else 'nrm',
             None if self.v_tng is None else 'tng',
+            None if self.f_mat is None else 'f_mat',
             None if self.material is None else f"mat={list(self.material.keys())}",
         ]
         return f"{self.__class__.__name__}({', '.join(si for si in s if si is not None)})"
 
     def merge(self, *meshes: 'Mesh'):
-        d = {'material': self.material}
+        d = {'material': self.material}  # TODO: merge meterial
         for attr in ['pos', 'tex', 'nrm', 'tng']:
             v = [getattr(self, f"v_{attr}")]  # vertex
             f = [getattr(self, f"f_{attr}")]  # faces
@@ -309,24 +331,3 @@ class Mesh:
                 d[f"v_{attr}"] = torch.cat(v, dim=0)
                 d[f"f_{attr}"] = torch.cat(f, dim=0)
         return Mesh(**d)
-
-
-def test():
-
-    class A:
-
-        def __init__(self, a=1) -> None:
-            self.a = a
-
-        def add(cls, *args):
-            a_sum = cls.a
-            for x in args:
-                a_sum += x.a
-            return A(a_sum)
-
-        def __repr__(self) -> str:
-            return f"A={self.a}"
-
-    As = [A(1), A(2), A(3)]
-    print(As[0].add(*As[1:]))
-    print(A.add(*As))

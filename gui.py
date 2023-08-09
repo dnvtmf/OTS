@@ -485,6 +485,8 @@ class TreeSegmentGUI(TreeSegment):
         return image
 
     def show_2d(self):
+        if self._image is None:
+            return
         image = np.zeros_like(self.image)
         is_show_mask = False
         # show all masks

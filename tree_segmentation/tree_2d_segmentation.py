@@ -724,11 +724,11 @@ class Tree2D(TreeStructure):
         self.update_tree()
         if compress:
             self.compress()
-            # self.uncompress()
-            # self.reset()
-            # self.update_tree()
-            # self.remove_not_in_tree()
-            # self.compress()
+            self.uncompress()
+            self.reset()
+            self.update_tree()
+            self.remove_not_in_tree()
+            self.compress()
         if self.verbose > 0:
             print(f"[Tree2D] complete post process")
         return self

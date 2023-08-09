@@ -30,6 +30,7 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
         dict: include vertices, faces, ..., materials
     """
     # TODO: use c++ to read
+    # TODO: delay load mtl
     filename = Path(filename)
     texture_dir = filename.parent
 
@@ -110,12 +111,16 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
     outputs['v_pos'] = torch.tensor(vertices, dtype=torch.float32)
     outputs['f_pos'] = torch.tensor(f_pos, dtype=torch.int64)
 
-    if len(texcoords) > 0:
-        outputs['v_tex'] = torch.tensor(texcoords, dtype=torch.float32)
+    if activeMatIdx != -1:
         outputs['f_tex'] = torch.tensor(f_tex, dtype=torch.int64)
+        if torch.any(outputs['f_tex'] < 0):
+            texcoords.append([0.5, 0.5])
+            outputs['f_tex'][outputs['f_tex'] < 0] = len(texcoords) - 1
+        outputs['v_tex'] = torch.tensor(texcoords, dtype=torch.float32)
     if len(normals) > 0:
         outputs['v_nrm'] = torch.tensor(normals, dtype=torch.float32)
         outputs['f_nrm'] = torch.tensor(f_nrm, dtype=torch.int64)
+        assert 0 <= outputs['f_nrm'].min() and outputs['f_nrm'].max() < len(outputs['v_nrm'])
     if mtl is not False:
         f_mat = torch.tensor(f_mat, dtype=torch.int64)
         if torch.any(f_mat.eq(-1)):
@@ -124,14 +129,19 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
         used, inverse_indices = torch.unique(f_mat, return_inverse=True)
         outputs['f_mat'] = inverse_indices
         outputs['materials'] = []
-        for i in used:
+        for j, i in enumerate(used):
             mat_name = used_materials[i]
+            # print(mat_name, f_mat.eq(i).sum(), outputs['f_mat'].eq(j).sum())
+            is_checked = False
             for mat in all_materials:
                 if mat.name == mat_name:
                     outputs['materials'].append(mat)
+                    is_checked = True
                     break
-        else:
-            outputs['materials'] = all_materials
+            assert is_checked
+        # print('num materials:', len(outputs['materials']))
+    else:  # FIXME: mkl=keep?
+        outputs['materials'] = all_materials
     return outputs
 
 
