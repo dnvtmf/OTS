@@ -197,7 +197,7 @@ class TreePredictor:
         for step in range(max_steps):
             # points, unfilled_mask = tree_data.sample_unfilled(points_per_update, filled_threshold)
             points = tree2d.sample_by_counts(points_per_update, sample_limit_fn, ratio=ratio)
-            if points is None:
+            if points is None or points.size == 0:
                 break
             if timer is not None:
                 timer.log('points')
@@ -227,6 +227,8 @@ class TreePredictor:
     def process_points(self, points: np.ndarray, normalized=True) -> MaskData:
         # Generate masks for this crop in batches
         data = MaskData()
+        if len(points) == 0:
+            return data
         for (points,) in batch_iterator(self.points_per_batch, points):
             batch_data = self._process_batch(points, self.original_size, normalized=normalized)
             batch_data['masks'] = batch_data['masks'].cpu()  # to avoid oom

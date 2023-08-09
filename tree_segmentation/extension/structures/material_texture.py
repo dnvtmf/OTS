@@ -210,8 +210,8 @@ class MultiTexture2D(nn.Module):
         textures = []
         for i in range(self.num):
             textures.append(dr.texture(self.textures[i][None], uv, uv_da, **kwargs))
-        textures = torch.stack([torch.zeros_like(textures[0])] + textures)
-        # assert 0 <= f_mat.min() and f_mat.max() <= self.num
+        textures = torch.stack(textures)
+        assert 0 <= f_mat.min() and f_mat.max() < self.num
         textures = torch.gather(textures, 0, f_mat[..., None].expand_as(textures[0])[None])[0]
         return textures
 

@@ -54,7 +54,8 @@ def render_mesh(
         if mesh.f_tex is not None:
             uv, uv_da = dr.interpolate(mesh.v_tex[None], rast, mesh.f_tex.int())
             if mesh.f_mat is not None:
-                f_mat = torch.where(faces == 0, torch.zeros_like(faces), mesh.f_mat[faces - 1] + 1)
+                # f_mat = torch.where(faces == 0, torch.zeros_like(faces), mesh.f_mat[faces - 1])
+                f_mat = mesh.f_mat[faces - 1]
             else:
                 f_mat = None
             ka = mesh.material['ka'].sample(uv, f_mat=f_mat) if 'ka' in mesh.material else 0
@@ -63,16 +64,15 @@ def render_mesh(
             if 'normal' in mesh.material:
                 perturbed_nrm = mesh.material['normal'].sample(uv, f_mat=f_mat)
         else:
-            ka = nrm.new_full((3,), default_kads[0])
-            kd = nrm.new_full((3,), default_kads[1])
-            ks = nrm.new_full((3,), default_kads[2])
+            ka = v_pos.new_full((3,), default_kads[0])
+            kd = v_pos.new_full((3,), default_kads[1])
+            ks = v_pos.new_full((3,), default_kads[2])
         if not use_face_normal and mesh.f_nrm is not None and mesh.f_tng is not None:
             nrm = ops_3d.compute_shading_normal(mesh, camera_pos, rast, perturbed_nrm)
         else:
             nrm = ops_3d.compute_shading_normal_face(mesh, camera_pos, rast, None)
         points, _ = dr.interpolate(mesh.v_pos[None].float(), rast, mesh.f_pos.int())
         images = ops_3d.Blinn_Phong(nrm, lights(points), view_direction, (ka, kd, ks))
-        # images = ops_3d.Blinn_Phong_abs(nrm, lights(points), view_direction, (ka, kd, ks))
     images = dr.antialias(images, rast, v_pos, mesh.f_pos.int()).clamp(0, 1)
     images = torch.where(rast[..., -1:] > 0, images, torch.full_like(images, background))
     if Tw2c.ndim == 2:

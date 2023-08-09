@@ -12,6 +12,7 @@ import torch
 import torch.nn.functional as F
 import torch_geometric as pyg
 import trimesh
+import trimesh.registration
 import yaml
 from rich.console import Console
 from rich.tree import Tree
@@ -70,6 +71,43 @@ def correct_face_orinent(mesh: Mesh, glctx, Tw2c, image_size=512):
     print('Completed correct face')
 
 
+def get_matched_from_shapenet(filepath: Path, part: Mesh):
+    #  Load Mesh
+    # whole = Mesh.load(mesh_path_shapenet.joinpath('models/model_normalized.obj'))
+    assert filepath.exists(), filepath
+    whole = Mesh.load(filepath)
+    whole = whole.to(device)
+    whole.check()
+    # Translate
+    v_pos = part.v_pos.clone()
+    v_pos[:, 0], v_pos[:, 2] = v_pos[:, 2], -v_pos[:, 0]
+    mi, mx = v_pos.aminmax(dim=0)
+    print(utils.show_shape(mi, mx), mi, mx)
+    center = 0.5 * (mi + mx)
+    scale = torch.sqrt(torch.sum((mx - mi)**2))
+    T = torch.tensor([
+        [0, 0, 1 / scale, -center[0] / scale],
+        [0, 1 / scale, 0, -center[1] / scale],
+        [-1 / scale, 0, 0, -center[2] / scale],
+        [0, 0, 0, 1],
+    ],
+                     device=device).inverse()
+
+    whole.v_pos = ops_3d.xfm(whole.v_pos, T)[:, :3].contiguous()
+    print(part, whole)
+
+    part_ = part.to_trimesh()
+    whole_ = whole.to_trimesh()
+    console.print('start registration')
+    T, dist = trimesh.registration.mesh_other(whole_, part_, samples=500, scale=False)
+    print(T)
+    print(dist)
+    assert dist < 1e-4
+    # whole.v_pos = ops_3d.xfm(whole.v_pos, torch.from_numpy(T).to(device).float())[:, :3].contiguous()
+    console.print('Matched Shape in ShapeNet')
+    return whole
+
+
 def get_textrue_from_shapenet(filepath: Path, part: Mesh):
     #  Load Mesh
     # whole = Mesh.load(mesh_path_shapenet.joinpath('models/model_normalized.obj'))
@@ -91,7 +129,7 @@ def get_textrue_from_shapenet(filepath: Path, part: Mesh):
         [0, 0, 0, 1],
     ],
                      device=device).inverse()
-    whole.v_pos = ops_3d.xfm(whole.v_pos, T)[:, :3]
+    whole.v_pos = ops_3d.xfm(whole.v_pos, T)[:, :3].contiguous()
     print(part, whole)
 
     part_ = part.to_trimesh()
@@ -104,6 +142,7 @@ def get_textrue_from_shapenet(filepath: Path, part: Mesh):
     chamfer_dist = dist_mat.min(0).mean() + dist_mat.min(1).mean()
     print('CD:', chamfer_dist)
     assert chamfer_dist < 0.1
+    return whole
     #
     closest, distance, triangle_id = trimesh.proximity.closest_point(whole_, part.v_pos.cpu().numpy())
     closest = torch.from_numpy(closest).cuda().float()
@@ -145,6 +184,9 @@ def get_textrue_from_shapenet(filepath: Path, part: Mesh):
 
 @torch.no_grad()
 def run_one(obj_dir: Path, save_dir: Path):
+    if save_dir.exists():
+        return
+
     with obj_dir.joinpath('meta.json').open('r') as f:
         meta = json.load(f)
     print('meta:', meta)
@@ -153,8 +195,6 @@ def run_one(obj_dir: Path, save_dir: Path):
         if ShapeNet_root.joinpath(categroy, meta['model_id']).is_dir():
             mesh_path_shapenet = ShapeNet_root.joinpath(categroy, meta['model_id'])
             break
-    print(f"Find corresponding shape in ShapeNet:", mesh_path_shapenet)
-    assert mesh_path_shapenet is not None
 
     # Load Parts
     part_paths = sorted(list(obj_dir.joinpath('objs').glob('*.obj')))
@@ -162,8 +202,14 @@ def run_one(obj_dir: Path, save_dir: Path):
     print(part_names)
     part_meshes = [Mesh.load(part_path, mtl=False) for part_path in sorted(part_paths)]
     part = Mesh.merge(*part_meshes).cuda()
+    part = part.unit_size()
     # get texture
-    get_textrue_from_shapenet(mesh_path_shapenet.joinpath('model.obj'), part)
+    if mesh_path_shapenet is not None:
+        print(f"Find corresponding shape in ShapeNet:", mesh_path_shapenet)
+        whole = get_textrue_from_shapenet(mesh_path_shapenet.joinpath('model.obj'), part)
+        # whole = get_matched_from_shapenet(mesh_path_shapenet.joinpath('model.obj'), part)
+    else:
+        whole = None
     # camera pose
     image_size = 1024
     fovy = math.radians(60)
@@ -177,34 +223,107 @@ def run_one(obj_dir: Path, save_dir: Path):
     Tw2v = ops_3d.look_at(eye, torch.zeros_like(eye))
     Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=device)
     Tw2c = Tv2c @ Tw2v
-
-    part.check()
-    correct_face_orinent(part, glctx, Tw2c, image_size=image_size)
-    part.check()
-    part = part.unit_size()
-    part.compuate_normals_()
-    part.compute_tangents_()
-    images, tri_ids = render_mesh(glctx, part, Tw2v=Tw2v, fovy=fovy, image_size=image_size, use_face_normal=True)
-    print('Complet Rendering')
     save_dir.mkdir(exist_ok=True, parents=True)
     torch.save(Tw2v, save_dir.joinpath('Tw2v.pth'))
 
-    images = images.clamp(0, 1).mul(255).to(torch.uint8).cpu().numpy()
-    for i in range(num_views):
-        utils.save_image(save_dir.joinpath(f"{i:03d}.png"), images[i])
+    part.check()
+    # part.check()
+    # part.compuate_normals_()
+    # part.compute_tangents_()
+    k = 0
+    for Tw2v_i in Tw2v.split(1, dim=0):
+        images, _ = render_mesh(glctx, part, Tw2v=Tw2v_i, fovy=fovy, image_size=image_size, use_face_normal=True)
+        images = images.clamp(0, 1).mul(255).to(torch.uint8).cpu().numpy()
+        for i in range(len(images)):
+            utils.save_image(save_dir.joinpath(f"{k:03d}_g.png"), images[i])
+            k += 1
+
+    print('Complete gray Rendering')
+    if whole is None:
+        return
+    whole.check()
+    # whole.compuate_normals_()
+    # whole.compute_tangents_()
+    k = 0
+    # correct_face_orinent(whole, glctx, Tw2v, image_size=image_size)
+    for Tw2v_i in Tw2v.split(1, dim=0):
+        images, _ = render_mesh(glctx, whole, Tw2v=Tw2v_i, fovy=fovy, image_size=image_size, use_face_normal=True)
+        images = images.clamp(0, 1).mul(255).to(torch.uint8).cpu().numpy()
+        for i in range(len(images)):
+            utils.save_image(save_dir.joinpath(f"{k:03d}.png"), images[i])
+            k += 1
     console.print('[green]Complete save')
+
+
+def get_shapes(root: Path, num_max_per_shape=100, print=print):
+    ins_seg_root = root.joinpath('../ins_seg_h5').resolve()
+    print('Dataset split root:', ins_seg_root)
+    # categories = os.listdir(ins_seg_root)
+    categories = [
+        # 'Bag',
+        'Bed',
+        # 'Bottle',
+        # 'Bowl',
+        'Chair',
+        'Clock',
+        'Dishwasher',
+        'Display',
+        'Door',
+        'Earphone',
+        'Faucet',
+        # 'Hat',
+        # 'Keyboard',
+        'Knife',
+        'Lamp',
+        # 'Laptop',
+        'Microwave',
+        # 'Mug',
+        'Refrigerator',
+        # 'Scissors',
+        'StorageFurniture',
+        'Table',
+        # 'TrashCan',
+        # 'Vase',
+    ]
+    print('The number of categories:', len(categories))
+    anno_ids = {}
+    for cat in categories:
+        test_json = ins_seg_root.joinpath(cat, 'test-00.json')
+        with open(test_json, 'r') as f:
+            test_info = json.load(f)
+        print(f'Category {cat} have {len(test_info)} shapes')
+        anno_ids[cat] = [x['anno_id'] for x in test_info][:num_max_per_shape]
+    # eval_ids = []
+    # for i in range(num_max_per_shape):
+    #     for j in range(len(categories)):
+    #         if i < len(anno_ids[j]):
+    #             eval_ids.append(anno_ids[j][i])
+    # print(f"There are {len(eval_ids)} to evaluate")
+    return anno_ids
+
+
+def debug():
+    obj_path = data_root.joinpath('12768')
+    run_one(obj_path, data_root.parent.joinpath('tree_seg', obj_path.name))
 
 
 def main():
     save_dir = data_root.parent.joinpath('tree_seg')
-    object_paths = list(data_root.glob('*'))
-    for obj_path in tqdm(object_paths):
-        console.print('-' * 40, obj_path, '-' * 40)
-        try:
-            run_one(obj_path, save_dir.joinpath(obj_path.name))
-        except AssertionError as e:
-            console.print(f'[red]AssertionError {e}')
+    # object_paths = list(data_root.glob('*'))
+    shape_paths = get_shapes(data_root)
+    max_num = max(len(v) for k, v in shape_paths.items())
+    for i in tqdm(range(max_num)):
+        for cat in shape_paths.keys():
+            if i >= len(shape_paths[cat]):
+                continue
+            obj_path = data_root.joinpath(shape_paths[cat][i])
+            console.print('-' * 40, obj_path, '-' * 40)
+            try:
+                run_one(obj_path, save_dir.joinpath(cat, obj_path.name))
+            except Exception as e:
+                console.print(f'[red]{str(e)}')
 
 
 if __name__ == '__main__':
     main()
+    # debug()

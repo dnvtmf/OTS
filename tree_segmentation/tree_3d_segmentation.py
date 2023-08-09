@@ -677,6 +677,7 @@ class Tree3Dv2(TreeStructure):
         self.Lmax = 0
         temp = torch.zeros(self.num_faces + 1, dtype=torch.float, device=self.device)
         mask_2d = torch.zeros(self.num_faces + 1, dtype=torch.int, device=self.device)
+        now_view = 0
         for vid in range(len(data)):
             tri_id = data[vid]['tri_id'].to(self.device)
 
@@ -708,7 +709,7 @@ class Tree3Dv2(TreeStructure):
                         indices_2d.append(len(masks_2d))
                     else:
                         masks_2d.append(temp.clone())
-                    indices_view.append(vid)
+                    indices_view.append(now_view)
                 if pack:
                     self.range_2d.append((self.M - len(nodes), self.M))
                     masks_2d.append(mask_2d.clone())
@@ -718,6 +719,7 @@ class Tree3Dv2(TreeStructure):
             if num_masks_v == 0:
                 print(f"[Tree3D] load 2d results: view {vid} no vaild masks")
                 continue
+            now_view += 1
             self.view_infos.append((v_faces, v_cnts))
             self.masks_view[self.V, v_faces] = 1  # cnts.float()
             self.range_view.append((num_masks_start, self.M))
@@ -766,6 +768,7 @@ class Tree3Dv2(TreeStructure):
         self.masks_view = torch.zeros((self.V, gt_tree.num_faces + 1), dtype=torch.bool, device=self.device)
         temp = torch.zeros(gt_tree.num_faces + 1, device=self.device)
 
+        now_view = 0
         for vid in range(self.V):
             tri_id = tri_ids[vid].to(self.device)
             v_faces, v_cnts = tri_id.unique(return_counts=True)
@@ -792,7 +795,8 @@ class Tree3Dv2(TreeStructure):
             num_masks.append(num_masks_vid)
             # gt_masks.append(torch.stack(masks_2d, dim=0).cpu())
             self.range_view.append((len(view_indices), len(view_indices) + num_masks_vid))
-            view_indices.extend([vid] * num_masks_vid)
+            view_indices.extend([now_view] * num_masks_vid)
+            now_view += 1
         if len(face_masks) == 0:
             print(f"Can not load gt, due there is no masks")
             return False
@@ -1231,7 +1235,10 @@ class Tree3Dv2(TreeStructure):
 
     def _get_masks(self, P: Tensor, eps=1e-7):
         # P shape: [K, M]
+        assert 0 <= self.indices_view.min() and self.indices_view.max() < self.V
+        torch.cuda.synchronize()
         weights = scatter(P, self.indices_view.long(), dim=1, dim_size=self.V, reduce='sum')
+        torch.cuda.synchronize()
         weights = (weights @ self.masks_view.float()).clamp_min(eps)
         assert P.shape[1] == self.M
         if self._masks_2d_packed:
@@ -1291,9 +1298,11 @@ class Tree3Dv2(TreeStructure):
             with torch.no_grad():
                 masks_2d = []
                 for i in range(s, e):
+                    assert 0 <= self.indices_2d[i] and self.indices_2d[i] < len(self.masks_2d)
                     masks_2d.append(self.masks_2d[self.indices_2d[i]] == (i + 1))
                 masks_2d = torch.stack(masks_2d, dim=0)[:, 1:].float()
         else:
+            assert 0 <= s and e <= len(self.masks_2d)
             masks_2d = self.masks_2d[s:e, 1:].float()
         inter = F.linear(masks[:, 1:], masks_2d * self.area)  # shape: [K, N], do not need *view_mask
         # print(inter.shape, now_area.shape, now_area_2.shape, (now_area_2 - now_area).abs().max())

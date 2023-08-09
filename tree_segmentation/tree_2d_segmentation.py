@@ -573,6 +573,8 @@ class Tree2D(TreeStructure):
                 sample_points = p1.float()
             else:
                 sample_points = torch.cat([p1, p2], dim=0).float()
+        if len(sample_points) == 0:
+            return None
         sample_points = sample_points + torch.randn_like(sample_points) * noise  # 随机噪声
         sample_points = sample_points / sample_points.new_tensor([W, H])
         return sample_points.clamp(0, 1).cpu().numpy()

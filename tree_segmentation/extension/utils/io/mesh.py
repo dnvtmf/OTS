@@ -72,7 +72,8 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
 
     # load faces
     activeMatIdx = -1
-    used_materials = [] if mtl is True else [mat.name for mat in all_materials]
+    # used_materials = [] if mtl is True else [mat.name for mat in all_materials]
+    mat_names = [mat.name for mat in all_materials]
     f_pos, f_tex, f_nrm, f_mat = [], [], [], []
     for line in lines:
         if len(line.split()) == 0:
@@ -80,11 +81,13 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
         prefix = line.split()[0].lower()
         if prefix == 'usemtl' and mtl is not False:  # Track used materials
             mat_name = line.split()[1]
-            if mat_name not in used_materials:
-                if not any(mat.name == mat_name for mat in all_materials):
-                    all_materials.append(MTL(mat_name))
-                used_materials.append(mat_name)
-            activeMatIdx = used_materials.index(mat_name)
+            # if mat_name not in used_materials:
+            #     if not any(mat.name == mat_name for mat in all_materials):
+            #         all_materials.append(MTL(mat_name))
+            #     used_materials.append(mat_name)
+            # activeMatIdx = used_materials.index(mat_name)
+            assert mat_name in mat_names
+            activeMatIdx = mat_names.index(mat_name)
         elif prefix == 'f':  # Parse face
             vs = line.split()[1:]
             nv = len(vs)
@@ -105,7 +108,7 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
                 f_pos.append([v0, v1, v2])
                 f_tex.append([t0, t1, t2])
                 f_nrm.append([n0, n1, n2])
-    assert len(f_tex) == len(f_pos) and len(f_nrm) == len(f_pos)
+    assert len(f_tex) == len(f_pos) and len(f_nrm) == len(f_pos) and len(f_tex) == len(f_mat)
 
     outputs = {}
     outputs['v_pos'] = torch.tensor(vertices, dtype=torch.float32)
@@ -125,23 +128,27 @@ def load_obj(filename: Path, mtl: Union[bool, List[MTL], str] = True):
         f_mat = torch.tensor(f_mat, dtype=torch.int64)
         if torch.any(f_mat.eq(-1)):
             all_materials.append(MTL('_none'))
-            f_mat = torch.where(f_mat.eq(-1), torch.full_like(f_mat, len(used_materials)), f_mat)
-        used, inverse_indices = torch.unique(f_mat, return_inverse=True)
-        outputs['f_mat'] = inverse_indices
-        outputs['materials'] = []
-        for j, i in enumerate(used):
-            mat_name = used_materials[i]
-            # print(mat_name, f_mat.eq(i).sum(), outputs['f_mat'].eq(j).sum())
-            is_checked = False
-            for mat in all_materials:
-                if mat.name == mat_name:
-                    outputs['materials'].append(mat)
-                    is_checked = True
-                    break
-            assert is_checked
+            # f_mat[f_mat < 0] = len(used_materials)
+            # used_materials.append('_none')
+            f_mat[f_mat < 0] = len(all_materials) - 1
+        if mtl == 'keep':
+            outputs['materials'] = all_materials
+            outputs['f_mat'] = f_mat
+        else:
+            used, inverse_indices = torch.unique(f_mat, return_inverse=True)
+            outputs['f_mat'] = inverse_indices
+            outputs['materials'] = [all_materials[i] for i in used]
+            # for j, i in enumerate(used):
+            #     mat_name = used_materials[i]
+            #     # print(mat_name, f_mat.eq(i).sum(), outputs['f_mat'].eq(j).sum())
+            #     is_checked = False
+            #     for mat in all_materials:
+            #         if mat.name == mat_name:
+            #             outputs['materials'].append(mat)
+            #             is_checked = True
+            #             break
+            #     assert is_checked
         # print('num materials:', len(outputs['materials']))
-    else:  # FIXME: mkl=keep?
-        outputs['materials'] = all_materials
     return outputs
 
 
