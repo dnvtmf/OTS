@@ -57,18 +57,27 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [ ] [3D] PartNet gt_seg
 
 ### 8.8 work list
-- [ ] [3D] PartNet gt_seg
+- [x] [3D] PartNet gt_seg
 - [ ] [2D] 完成2D对比实验 origin_tree
-- [ ] [2D] 完成2D对比实验 0.5
+- [x] [2D] 完成2D对比实验 0.5
 - [ ] [3D] indoor dataset
-- [ ] [3D] outdoor dataset
-- [ ] [3D] 室外场景
+- [x] [3D] outdoor dataset
+- [x] [3D] 室外场景
 - [ ] [Paper] 撰写相关工作
-- [ ] [3D] PartNet使用纹理
+- [x] [3D] PartNet使用纹理
+
+### 8.9  
+- [x] [Paper] 撰写Introduction
+- [x] [2D] 完成2D对比实验 0
+- [x] [2D] 完成2D对比实验 1.0
+
+### 8.10 work list
+- [ ] [3D] 快速2D分割 (failed)
+- [ ] [3D] view选择
+- [ ] [Paper] 插图绘制
+- [ ] [3D] 测试样本筛选
 
 ### future
-- [ ] [2D] 完成2D对比实验 0
-- [ ] [2D] 完成2D对比实验 1.0
 - [ ] [2D] 测试automatic mask generator的结果
 - [ ] [2D] metric set ignore nodes
 - [ ] [2D] run experiment on PASCAL VOC/Cityscapes
@@ -79,7 +88,6 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [ ] [GUI] Edit 2D: 右键单击显示上一层和下一层
 - [ ] [GUI] 合并save和load, 增加删除按钮
 - [ ] [3D] Tree3Dv2._get_masks 使用CUDA实现
-- [ ] [Paper] 撰写Introduction
 - [ ] [Paper] 补充材料
 - [ ] [Paper] Demo视频
 - [ ] [3D] 简化或细分Mesh

@@ -312,7 +312,10 @@ class Tree2D(TreeStructure):
                 self._areas = F.pad(self._areas, [0, N - M], value=0)
             self.num_samples = F.pad(self.num_samples, [0, N - M], value=0)
         assert len(self.parent) == N and len(self.num_samples) == N, f"{N}!={len(self.parent)}/{len(self.num_samples)}"
-        assert len(self.scores) == N - 1 and len(self._masks) == N - 1, f"{len(self.scores)} != {N-1}"
+        if self._masks is None:
+            assert M == 1 and len(self.scores) == N - 1
+        else:
+            assert len(self.scores) == N - 1 and len(self._masks) == N - 1, f"{len(self.scores)} != {N-1}"
         assert self.cnt <= N, f"cnt={self.cnt} > N={N}"
         return N, M
 

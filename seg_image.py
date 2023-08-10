@@ -37,7 +37,7 @@ def options():
     parser.add_argument('--max-steps', default=100, type=int)
     parser.add_argument('--points_per_update', default=256, type=int)
     parser.add_argument('--points_per_side', default=32, type=int)
-    parser.add_argument('--in_threshold', default=0.9, type=float)
+    parser.add_argument('--in_threshold', default=0.8, type=float)
     parser.add_argument('--in_area_threshold', default=50, type=float)
     parser.add_argument('--union_threshold', default=0.1, type=float)
     parser.add_argument('--min_area', default=100, type=float)

@@ -1,6 +1,7 @@
 import math
 from typing import Tuple
 import nvdiffrast.torch as dr
+import numpy as np
 import torch
 from torch import Tensor
 from tree_segmentation.extension import Mesh, utils
@@ -79,3 +80,77 @@ def render_mesh(
         return images[0, :, :, :3], faces[0]
     else:
         return images, faces
+
+
+def choose_best_views(
+    glctx,
+    mesh: Mesh,
+    Tw2c: Tensor,
+    N=100,
+    image_size=1024,
+    num_split=10,
+):
+    # get faces
+    device = Tw2c.device
+    M = Tw2c.size(0)
+    assert M >= N
+    tri_ids = []
+    for i in range(0, M, num_split):
+        v_pos = ops_3d.xfm(mesh.v_pos, Tw2c[i:i + num_split])
+        rast, _ = dr.rasterize(glctx, v_pos, mesh.f_pos.int(), (image_size, image_size))
+        tri_ids.append(rast[..., -1].int())
+    tri_ids = torch.cat(tri_ids, dim=0)
+    face_indices = [torch.unique(tri_ids[i]) for i in range(M)]
+    del tri_ids
+    #  init
+    cnt = torch.zeros(mesh.f_pos.shape[0] + 1, device=device)
+    choosed = []
+    for i in np.random.choice(M, N, replace=False):
+        cnt[face_indices[i]] += 1
+        choosed.append(i)
+    # score = torch.std(cnt)
+    score = torch.mean(cnt)
+    best_choosed = choosed.copy()
+    # choose best
+    best_score = score
+    for i in range(M * 10):
+        # if i % 100 == 0:
+        #     print(f'step: {i}, score: {score.item():.4f}, best: {best_score.item():.4f}')
+        x = np.random.choice(choosed, 1)[0]
+        y = np.random.choice(M, 1)[0]
+        cnt[face_indices[x]] -= 1
+        cnt[face_indices[y]] += 1
+
+        # new_score = torch.std(cnt)
+        new_score = torch.mean(cnt)
+        if best_score < new_score:
+            best_score = new_score
+            best_choosed = choosed.copy()
+        if new_score < score or np.random.rand() < 0:
+            score = new_score
+            choosed.pop(choosed.index(x))
+            choosed.append(y)
+        else:
+            cnt[face_indices[x]] += 1
+            cnt[face_indices[y]] -= 1
+    print('Best the average number of viewed faces:', best_score)
+    return torch.tensor(best_choosed, device=device, dtype=torch.long)
+
+
+def random_camera_position(mesh: Mesh, bbox: Tensor = None, N=100, min_dist=0.1) -> Tensor:
+    import trimesh
+    device = mesh.v_pos.device
+    mesh = mesh.to_trimesh()
+    if bbox is None:
+        AABB = mesh.AABB.cpu().numpy()
+        box_min = AABB[0].numpy() - min_dist
+        box_max = AABB[1].numpy() - min_dist
+    else:
+        bbox = bbox.cpu().numpy()
+        box_min = bbox[0]
+        box_max = bbox[1]
+    points = np.random.rand(N, 3) * (box_max - box_min) + box_min
+    _, distance, _, = trimesh.proximity.closest_point(mesh, points)
+    points = points[distance > min_dist]
+    eye = torch.from_numpy(points).float().to(device)
+    return eye

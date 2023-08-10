@@ -17,7 +17,7 @@ from rich.tree import Tree
 import torch_geometric as pyg
 
 from tree_segmentation.extension import Mesh, utils, ops_3d
-from tree_segmentation import Tree3Dv2, Tree3D, render_mesh, TreePredictor, Tree2D
+from tree_segmentation import Tree3Dv2, Tree3D, render_mesh, TreePredictor, Tree2D, choose_best_views
 from tree_segmentation.metric import TreeSegmentMetric
 
 from evaluation.util import run_predictor, predictor_options, get_predictor
@@ -102,7 +102,35 @@ def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path):
     return mesh, gt_v2
 
 
-def get_images(mesh: Mesh, image_size=256, num_views=1, num_split=10, seed=42, fovy=60):
+def get_images_best_view(mesh: Mesh, image_size=1024, num_views=100, num_split=10, seed=0, fovy=60, more_ratio=10):
+    if seed > 0:
+        torch.manual_seed(seed)
+    fovy = math.radians(fovy)
+    max_views = int(num_views * more_ratio)
+    radius = torch.rand((max_views,), device=device) * 0.1 + 2.5
+    thetas = torch.arccos(torch.rand((max_views,), device=device) * 2. - 1.)
+    phis = torch.rand((max_views,), device=device) * 2.0 * torch.pi
+    eye = ops_3d.coord_spherical_to(radius, thetas, phis).to(device)
+    Tw2vs = ops_3d.look_at(eye, torch.zeros_like(eye))
+    Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=device)
+    Tw2c = Tv2c @ Tw2vs
+
+    best_indices = choose_best_views(glctx, mesh, Tw2c, num_views, image_size, num_split)
+    Tw2vs = Tw2vs[best_indices]
+
+    images = []
+    tri_ids = []
+    for s in range(0, num_views, num_split):
+        e = min(s + num_split, num_views)
+        images_i, tri_ids_i = render_mesh(glctx, mesh, Tw2v=Tw2vs[s:e], fovy=fovy, image_size=image_size)
+        images.append(images_i)
+        # tri_ids.append(part_map[rast[..., -1].long()])
+        tri_ids.append(tri_ids_i)
+    images, tri_ids = torch.cat(images, dim=0), torch.cat(tri_ids, dim=0)
+    return images.cpu(), tri_ids.cpu(), Tw2vs.cpu()
+
+
+def get_images(mesh: Mesh, image_size=256, num_views=1, num_split=10, seed=0, fovy=60):
     if seed > 0:
         torch.manual_seed(seed)
     fovy = math.radians(fovy)
@@ -129,14 +157,14 @@ def get_images(mesh: Mesh, image_size=256, num_views=1, num_split=10, seed=42, f
     return images.cpu(), tri_ids.cpu(), Tw2vs.cpu()
 
 
-def load_images(mesh: Mesh, image_dir: Path, num_views=1, fovy=60, colored=False):
-    Tw2vs = torch.load(image_dir.joinpath("Tw2v.pth"), map_location='cpu')
+def load_images(mesh: Mesh, image_dir: Path, num_views=1, fovy=60):
+    Tw2vs = torch.load(image_dir.joinpath("Tw2v.pth"), map_location='cpu')[:num_views]
     images = []
     for i in range(num_views):
-        if colored:
-            image = utils.load_image(image_dir.joinpath(f"{i:03d}.png"))  # type: np.ndarray
-        else:
-            image = utils.load_image(image_dir.joinpath(f"{i:03d}_g.png"))  # type: np.ndarray
+        # if colored:
+        image = utils.load_image(image_dir.joinpath(f"{i:03d}.png"))  # type: np.ndarray
+        # else:
+        #     image = utils.load_image(image_dir.joinpath(f"{i:03d}_g.png"))  # type: np.ndarray
         image = torch.from_numpy(image.copy()).float() / 255.
         images.append(image)
     images = torch.stack(images)  #NxHxWx3
@@ -187,15 +215,26 @@ def build_view_graph(area, tri_ids: Tensor, threshold=0.5, num_nearest=5):
     return A
 
 
-def run_fast_2d_semgentation(cache_dir: Path, mesh: Mesh, images: Tensor, tri_ids: Tensor, Tw2vs: Tensor):
-    predictor = get_predictor()  # type: TreePredictor
+def run_fast_2d_semgentation(
+    cache_dir: Path,
+    mesh: Mesh,
+    images: Tensor,
+    tri_ids: Tensor,
+    Tw2vs: Tensor,
+    num_points=10,
+    steps=10,
+    predictor: TreePredictor = None,
+):
+    if predictor is None:
+        predictor = get_predictor()
     v3 = mesh.v_pos[mesh.f_pos]  # shape: (F, 3, 3)
     area = torch.cross(v3[:, 0] - v3[:, 1], v3[:, 0] - v3[:, 2], dim=-1).norm(dim=-1) * 0.5
     A = build_view_graph(area, tri_ids)
     features = []
     results = []
     N = len(images)
-    images = (images[i, :, :, :3] * 255).to(torch.uint8).cpu().numpy()
+    images = (images[:, :, :, :3] * 255).to(torch.uint8).cpu().numpy()
+    _, H, W, _ = images.shape
     # first stage
     for i in range(N):
         predictor.set_image(images[i])
@@ -211,67 +250,111 @@ def run_fast_2d_semgentation(cache_dir: Path, mesh: Mesh, images: Tensor, tri_id
         output = predictor.process_points(points)
         num_ignored = tree2d.insert_batch(output)
         tree2d.remove_not_in_tree()
+        tree2d.remove_background(tri_ids[i].eq(0))
         tree2d.compress()
-        predictor.reset_image()
+        # predictor.reset_image()
         results.append(tree2d)
+    print('complete stage1')
     # second stage
-    for step in range(1):
-        pass
+    for step in range(steps):
+        # predictor.set_image(images[0])
+        for i in range(N):
+            points = []
+            for j in range(N):
+                if i == j or A[i, j] <= 0:
+                    continue
+                results[j]
+                masks = results[j].masks
+                for l, x in enumerate(results[j].get_levels()):
+                    if l == 0:
+                        continue
+                    temp = torch.zeros(area.shape[0] + 1, dtype=torch.int, device=device)
+                    for k in x:
+                        temp[torch.unique(tri_ids[j][masks[k - 1]].to(device))] = k
+                    temp[0] = 0
+                    mask = temp[tri_ids[i]]
+                    for k in x:
+                        mask_k = torch.nonzero(mask == k)
+                        if len(mask_k) > 0:
+                            points.append(mask_k[torch.randint(0, len(mask_k), (num_points,))])
+            points = torch.cat(points, dim=0).flip(1).cpu().numpy() / np.array([W, H])
+            predictor.features = utils.tensor_to(features[i], device=device)
+            results[i].insert_batch(predictor.process_points(points))
+            tree2d.remove_background(tri_ids[i].eq(0))
+            results[i].remove_not_in_tree()
+            results[i].compress()
+        print(f'complete stage2 step={step}')
+    # save
+    for index in range(N):
+        data = {
+            'tree_data': results[i].save(filename=None),
+            'tri_id': tri_ids[index].clone(),
+            # 'image': images[index].clone(),
+            'Tw2v': Tw2vs[index].clone(),
+        }
+        torch.save(data, cache_dir.joinpath(f"view_{index:04d}.data"))
+    print('complete save reults')
+    return
 
 
 @torch.no_grad()
-def eval_one(
-    args,
-    example,
-    cache_root,
-    metric: TreeSegmentMetric,
-    num_views=100,
-    epochs_ea=3000,
-    epochs_run=5000,
-    force_2d=False,
-    force_3d=False,
-    use_gt_2d=False,
-    image_dir: Path = None,
-    print=print,
-):
-    print(f"Example dir", example)
-    cache_dir = cache_root.joinpath(f"{example.name}")
+def eval_one(args,
+             shape_root: Path,
+             cache_root: Path,
+             metric: TreeSegmentMetric,
+             num_views=100,
+             epochs_ea=3000,
+             epochs_run=5000,
+             print=print):
+    print(f"Shape Dir", shape_root)
+    cache_dir = cache_root.joinpath(f"{shape_root.name}")
     cache_dir.mkdir(exist_ok=True)
     print('Cache Dir:', cache_dir)
+    image_dir = cache_dir.joinpath('images')
+    image_dir.mkdir(exist_ok=Tree)
 
     if 1 and cache_dir.joinpath('gt.tree3dv2').exists():
-        mesh = torch.load(cache_dir.joinpath(example.stem + '.mesh_cache'), map_location=device)
+        mesh = torch.load(cache_dir.joinpath(shape_root.stem + '.mesh_cache'), map_location=device)
         gt = Tree3Dv2(mesh, device=device)
         gt.load(cache_dir.joinpath('gt.tree3dv2'))
     else:
-        mesh, gt = get_mesh_and_gt_tree(example, cache_dir)
+        mesh, gt = get_mesh_and_gt_tree(shape_root, cache_dir)
     gt = gt.to('cpu')
-    if len(gt.masks) == 0 or len(gt.masks) >= 200:
-        return
+    # if len(gt.masks) == 0 or len(gt.masks) >= 200:
+    #     return
+    print("Mesh:", mesh)
+    print('GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
 
-    if use_gt_2d:
-        if image_dir is not None:
-            images, tri_ids, Tw2vs = load_images(mesh, image_dir, num_views=num_views, colored=args.colored)
+    force_2d = args.force_2d or len(list(cache_dir.glob(f"view_*.data"))) < num_views
+    if args.force_view or args.gt_2d or force_2d:
+        if args.force_view or len(list(image_dir.glob('*.png'))) < num_views:
+            if args.random_views:
+                images, tri_ids, Tw2vs = get_images(mesh, image_size=args.image_size, num_views=num_views)
+            else:
+                images, tri_ids, Tw2vs = get_images_best_view(mesh, image_size=args.image_size, num_views=num_views)
+            torch.save(Tw2vs, image_dir.joinpath('Tw2v.pth'))
+            filename_fmt = '{:0%dd}.png' % len(str(num_views))
+            for i in range(num_views):
+                utils.save_image(image_dir.joinpath(filename_fmt.format(i)), images[i])
+            print('Save all images in:', image_dir)
+            force_2d = True
         else:
-            images, tri_ids, Tw2vs = get_images(mesh, image_size=1024, num_views=num_views, seed=42)
-        del images, Tw2vs
-    elif force_2d or len(list(cache_dir.glob(f"view_*.data"))) < num_views:
-        if image_dir is not None:
             images, tri_ids, Tw2vs = load_images(mesh, image_dir, num_views=num_views)
-        else:
-            images, tri_ids, Tw2vs = get_images(mesh, image_size=1024, num_views=num_views, seed=42)
-        run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
+        print('[Image] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
+        if force_2d:
+            run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
+            print('[2D] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
         del images, Tw2vs
+    else:
+        tri_ids = None
 
-    # return
-    # print(utils.get_GPU_memory())
     # 3D Tree segmentation
-    save_path = cache_dir.joinpath('gt_seg.tree3dv2' if use_gt_2d else 'my.tree3dv2')
+    save_path = cache_dir.joinpath('gt_seg.tree3dv2' if args.gt_2d else 'my.tree3dv2')
     tree3d = Tree3Dv2(mesh, device=device)
-    if not force_3d and save_path.exists():
+    if not args.force_3d and save_path.exists():
         tree3d.load(save_path)
     else:
-        if use_gt_2d:
+        if args.gt_2d:
             if not tree3d.build_gt_segmentation(gt.to(device), tri_ids.cuda()):
                 return
             gt.to(torch.device('cpu'))
@@ -331,84 +414,39 @@ def options():
     parser = argparse.ArgumentParser('3D Tree Segmentation for PartNet')
     parser.add_argument('-o', '--output', default='/data5/wan/PartNet', help='The directory to cache tree3d results')
     parser.add_argument('--data-root', default='~/data/PartNet/data_v0', help="The root path of PartNet dataset")
-    parser.add_argument('-s', '--split-dir', default='', help='The split to test')
+    parser.add_argument('-s', '--split', default='', help='The split to test')
     parser.add_argument('-n', '--epochs', default=5000, type=int, help='The number of epochs when run tree3d')
     parser.add_argument('-ae', '--ae-epochs', default=3000, type=int, help='The number of epochs when run autoencoder')
     parser.add_argument('-v', '--num-views', default=100, type=int, help='The number of rendered views')
-    parser.add_argument('-ns', '--num-shapes', default=10, type=int, help='The number of shapes per category')
+    parser.add_argument('-ns', '--num-shapes', default=-1, type=int, help='The number of shapes to test')
+    parser.add_argument('--start-index', default=0, type=int, help='The start index to test')
     parser.add_argument('--seed', default=42, type=int, help='The seed to random choose evaluation shapes')
     # parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
-    parser.add_argument('--gt-2d', action='store_true', default=False, help='Use GT 2D segmentation results')
     parser.add_argument('-k', '--K-ratio', default=2, type=float, help='Set the default ')
     parser.add_argument('--log', default=None, help='The filepath for log file')
-    parser.add_argument(
-        '--force-3d',
-        action='store_true',
-        default=False,
-        help='Force run 3d tree segment rather than use cached results')
-    parser.add_argument(
-        '--force-2d',
-        action='store_true',
-        default=False,
-        help='Force run 2d tree segment rather than use cached results')
+
+    utils.add_bool_option(parser, '--gt-2d', help='Use GT 2D segmentation results')
+    utils.add_bool_option(parser, '--force-3d', help='Force run 3d tree segment rather than use cached')
+    utils.add_bool_option(parser, '--force-2d', help='Force run 2d tree segment rather than use cached')
+    utils.add_bool_option(parser, '--force-view', help='Force run view generateiong rather than use cached')
+    utils.add_bool_option(parser, '--random-views', default=False, help='Random generate views')
+    # utils.add_bool_option(parser, '--colored', default=False, help='The colored images')
+
     utils.add_cfg_option(parser, '--loss-weights', default={}, help='The weigths of loss')
-    utils.add_cfg_option(parser, '--colored', default=False, help='The colored images')
     predictor_options(parser)
     args = parser.parse_args()
     return args
-
-
-def get_shapes(root: Path, num_max_per_shape=100, print=print):
-    ins_seg_root = root.joinpath('../ins_seg_h5').resolve()
-    print('Dataset split root:', ins_seg_root)
-    # categories = os.listdir(ins_seg_root)
-    categories = [
-        # 'Bag',
-        'Bed',
-        # 'Bottle',
-        # 'Bowl',
-        'Chair',
-        'Clock',
-        'Dishwasher',
-        'Display',
-        'Door',
-        'Earphone',
-        'Faucet',
-        # 'Hat',
-        # 'Keyboard',
-        'Knife',
-        'Lamp',
-        # 'Laptop',
-        'Microwave',
-        # 'Mug',
-        'Refrigerator',
-        # 'Scissors',
-        'StorageFurniture',
-        'Table',
-        # 'TrashCan',
-        # 'Vase',
-    ]
-    print('The number of categories:', len(categories))
-    anno_ids = []
-    for cat in categories:
-        test_json = ins_seg_root.joinpath(cat, 'test-00.json')
-        with open(test_json, 'r') as f:
-            test_info = json.load(f)
-        print(f'Category {cat} have {len(test_info)} shapes')
-        anno_ids.append([x['anno_id'] for x in test_info])
-    eval_ids = []
-    for i in range(num_max_per_shape):
-        for j in range(len(categories)):
-            if i < len(anno_ids[j]):
-                eval_ids.append(anno_ids[j][i])
-    print(f"There are {len(eval_ids)} to evaluate")
-    return eval_ids
 
 
 @torch.no_grad()
 def main():
     global console
     args = options()
+
+    torch.manual_seed(args.seed)
+    torch.cuda.manual_seed_all(args.seed)
+    np.random.seed(args.seed)
+
     console = Console(record=bool(args.log))
     console.print(args)
 
@@ -419,37 +457,35 @@ def main():
     cache_root.mkdir(exist_ok=True)
     console.print(f"The middle results will cache in: {cache_root}")
 
-    shapes = list(os.scandir(data_root))
-    console.print(f'There are {len(shapes)} shapes')
-
+    if args.split == '' or not os.path.exists(args.split):
+        shapes = sorted(os.listdir(Path(args.split).expanduser()))
+    else:
+        with open(args.split, 'r') as f:
+            shapes = [line.strip() for line in f.readlines() if line.strip()]
+    console.print(f'[green]There are {len(shapes)} shapes, test {args.num_shapes} shapes')
+    assert 0 <= args.start_index < len(shapes)
+    shapes = shapes[args.start_index:]
+    if args.num_shapes > 0:
+        shapes = shapes[:args.num_shapes]
     get_predictor(args, print=console.print)
 
-    torch.manual_seed(args.seed)
-    # index = torch.randint(0, len(shapes), (args.num_shapes,))
-    # console.print(f"Evaluate {len(index)} shapes of PartNet")
-    # shapes[i.item()].name
     metric = TreeSegmentMetric()
-    split_dir = None
-    if args.split_dir == '':
-        shapes = get_shapes(data_root, num_max_per_shape=args.num_shapes, print=print)
-    else:
-        split_dir = Path(args.split_dir).expanduser()
-        shapes = os.listdir(split_dir)
+    for shape in tqdm(shapes):
+        try:
+            eval_one(
+                args,
+                data_root.joinpath(shape),
+                cache_root=cache_root,
+                metric=metric,
+                num_views=args.num_views,
+                epochs_ea=args.ae_epochs,
+                epochs_run=args.epochs,
+                print=console.print,
+            )
+        except Exception as e:
+            console.print(f"[red] ERROR: {str(e)}")
+            torch.cuda.empty_cache()
 
-    for shape in shapes:
-        eval_one(
-            args,
-            data_root.joinpath(shape),
-            cache_root=cache_root,
-            metric=metric,
-            num_views=args.num_views,
-            epochs_ea=args.ae_epochs,
-            epochs_run=args.epochs,
-            force_3d=args.force_3d,
-            force_2d=args.force_2d,
-            use_gt_2d=args.gt_2d,
-            print=console.print,
-            image_dir=split_dir.joinpath(shape) if split_dir else None)
         console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
     if args.log:
         console.save_text(cache_root.joinpath(args.log))

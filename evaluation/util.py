@@ -52,10 +52,11 @@ def predictor_options(parser: argparse.ArgumentParser):
     return group
 
 
-def get_predictor(args, print=print):
+def get_predictor(args=None, print=print):
     global predictor
     if predictor is not None:
         return predictor
+    assert args is not None
     model_dir = Path(args.weights).expanduser()
     if args.segment_anything or args.segment_anything_h:
         assert model_dir.joinpath('sam_vit_h_4b8939.pth').exists(), f"Not model 'sam_vit_h_4b8939.pth' in {model_dir}"

@@ -651,6 +651,7 @@ class Tree3Dv2(TreeStructure):
 
     @torch.no_grad()
     def load_2d_results(self, save_root: Path, N_view=-1, background_threshold=0.5, pack=False):
+        torch.cuda.empty_cache()
         print('[Tree3D] GPU:', utils.get_GPU_memory())
         seg_2d_files = sorted(list(save_root.glob('*.data')))  # [:50]
         print(f'[Tree3D] There are {len(seg_2d_files)} data')
@@ -688,8 +689,10 @@ class Tree3Dv2(TreeStructure):
             tree2d.load(None, **data[vid]['tree_data'])
             tree2d.remove_background(tri_id.eq(0), background_threshold)
             # tree2d.compress()
-
+            
+            # print(f'view: {vid}', utils.get_GPU_memory(), tree2d.cnt)
             masks = tree2d.masks
+            assert masks.ndim == 3
             num_masks_start = self.M
             num_levels = 0
             for level, nodes in enumerate(tree2d.get_levels()):
