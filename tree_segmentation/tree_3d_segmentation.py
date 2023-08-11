@@ -545,7 +545,7 @@ class Tree3Dv2(TreeStructure):
         self,
         mesh: Mesh,
         device=None,
-        in_threshold=0.9,
+        in_threshold=0.8,
         union_threshold=0.1,
         #  min_area=100,
         # in_thres_area=10,
@@ -689,7 +689,7 @@ class Tree3Dv2(TreeStructure):
             tree2d.load(None, **data[vid]['tree_data'])
             tree2d.remove_background(tri_id.eq(0), background_threshold)
             # tree2d.compress()
-            
+
             # print(f'view: {vid}', utils.get_GPU_memory(), tree2d.cnt)
             masks = tree2d.masks
             assert masks.ndim == 3

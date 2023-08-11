@@ -94,7 +94,8 @@ def get_predictor(args=None, print=print):
         pred_iou_thresh=args.pred_iou_thresh,
         stability_score_thresh=args.stability_score_thresh,
         box_nms_thresh=args.box_nms_thresh,
-        image_size=args.image_size)
+        # image_size=args.image_size
+    )
     predictor.generate_cfg = args
     print('build predictor')
     return predictor

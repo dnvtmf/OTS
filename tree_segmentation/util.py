@@ -92,9 +92,10 @@ def image_add_points(image: np.ndarray, points: np.ndarray, s=5):
     return image
 
 
-def image_add_mask_boundary(image: np.ndarray, mask: Tensor, color=(1., 0, 0)):
+def image_add_mask_boundary(image: np.ndarray, mask: Tensor, color=(1., 0, 0), kernel_size=7):
     mask = F.interpolate(mask[None, None, :, :].float(), size=image.shape[:2], mode='nearest')
-    boundary = F.avg_pool2d(mask, 7, 1, 3)
+    assert kernel_size % 2 == 1
+    boundary = F.avg_pool2d(mask, kernel_size, 1, kernel_size // 2)
     boundary = torch.logical_and(boundary.ne(mask), mask).cpu().numpy()[0, 0]
     image = image.copy()
     image[boundary, :3] = color

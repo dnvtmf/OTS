@@ -15,6 +15,7 @@ from tqdm import tqdm
 from rich.console import Console
 from rich.tree import Tree
 import torch_geometric as pyg
+import torch_geometric.nn as pyg_nn
 
 from tree_segmentation.extension import Mesh, utils, ops_3d
 from tree_segmentation import Tree3Dv2, Tree3D, render_mesh, TreePredictor, Tree2D, choose_best_views
@@ -178,11 +179,11 @@ def load_images(mesh: Mesh, image_dir: Path, num_views=1, fovy=60):
 
 def run_2d_segmentation(cache_dir: Path, images: Tensor, tri_ids: Tensor, Tw2vs: Tensor):
     num_views = images.shape[0]
-    for index in tqdm(range(num_views)):
+    for index in tqdm(range(num_views), desc='Tree2D'):
         if cache_dir.joinpath(f"view_{index:04d}.data").exists():
             continue
         torch.cuda.empty_cache()
-        tree_data = run_predictor((images[index, :, :, :3].cpu().numpy() * 255).astype(np.uint8))
+        tree_data = run_predictor((images[index, :, :, :3].cpu().numpy() * 255).astype(np.uint8), device=device)
         data = {
             'tree_data': tree_data.save(filename=None),
             'tri_id': tri_ids[index].clone(),
@@ -325,8 +326,8 @@ def eval_one(args,
     print("Mesh:", mesh)
     print('GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
 
-    force_2d = args.force_2d or len(list(cache_dir.glob(f"view_*.data"))) < num_views
-    if args.force_view or args.gt_2d or force_2d:
+    run_2d = args.force_2d or len(list(cache_dir.glob(f"view_*.data"))) < num_views
+    if args.force_view or args.gt_2d or run_2d:
         if args.force_view or len(list(image_dir.glob('*.png'))) < num_views:
             if args.random_views:
                 images, tri_ids, Tw2vs = get_images(mesh, image_size=args.image_size, num_views=num_views)
@@ -337,11 +338,11 @@ def eval_one(args,
             for i in range(num_views):
                 utils.save_image(image_dir.joinpath(filename_fmt.format(i)), images[i])
             print('Save all images in:', image_dir)
-            force_2d = True
+            run_2d = True
         else:
             images, tri_ids, Tw2vs = load_images(mesh, image_dir, num_views=num_views)
         print('[Image] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
-        if force_2d:
+        if run_2d:
             run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
             print('[2D] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
         del images, Tw2vs
@@ -349,7 +350,10 @@ def eval_one(args,
         tri_ids = None
 
     # 3D Tree segmentation
-    save_path = cache_dir.joinpath('gt_seg.tree3dv2' if args.gt_2d else 'my.tree3dv2')
+    if args.filename is None:
+        save_path = cache_dir.joinpath('gt_seg.tree3dv2' if args.gt_2d else 'my.tree3dv2')
+    else:
+        save_path = cache_dir.joinpath(args.filename).with_suffix('.tree3dv2')
     tree3d = Tree3Dv2(mesh, device=device)
     if not args.force_3d and save_path.exists():
         tree3d.load(save_path)
@@ -363,10 +367,36 @@ def eval_one(args,
         # Gv = tree3d.build_view_graph()
         # Gm = tree3d.build_graph(Gv)
         A = tree3d.build_all_graph()
-        X, _ = tree3d.compress_masks(epochs=epochs_ea)
+        X_file = cache_dir.joinpath('X_gt.pth' if args.gt_2d else 'X.pth')
+        if X_file.exists() and not run_2d:
+            X = torch.load(X_file, map_location=device)
+            print('Load X from:', X_file)
+        else:
+            X, _ = tree3d.compress_masks(epochs=epochs_ea)
+            torch.save(X, X_file)
         K = int(tree3d.Lmax * args.K_ratio)
-        gnn = pyg.nn.GCN(
-            in_channels=X.shape[1], hidden_channels=128, num_layers=2, out_channels=K, norm='BatchNorm').cuda()
+        gnn_type = args.gnn.upper()
+        if gnn_type == 'NONE':
+            gnn = None
+        else:
+            gnn_m = {
+                'GCN': pyg_nn.GCN,
+                'CHEB': pyg_nn.ChebConv,
+                'GRAPH': pyg_nn.GraphConv,
+                'LG': pyg_nn.LGConv,
+                'FA': pyg_nn.FAConv,
+                'GCN2': pyg_nn.GCN2Conv,
+                'LE': pyg_nn.LEConv,
+                'SSG': pyg_nn.SSGConv,
+                'SG': pyg_nn.SGConv,
+            }[gnn_type]
+            gnn = gnn_m(
+                in_channels=X.shape[1],
+                hidden_channels=args.gnn_hidden_dim,
+                num_layers=args.gnn_layers,
+                out_channels=K,
+                norm='BatchNorm',
+            ).cuda()
         # print(gnn)
         tree3d.run(
             epochs=epochs_run,
@@ -415,16 +445,21 @@ def options():
     parser.add_argument('-o', '--output', default='/data5/wan/PartNet', help='The directory to cache tree3d results')
     parser.add_argument('--data-root', default='~/data/PartNet/data_v0', help="The root path of PartNet dataset")
     parser.add_argument('-s', '--split', default='', help='The split to test')
-    parser.add_argument('-n', '--epochs', default=5000, type=int, help='The number of epochs when run tree3d')
-    parser.add_argument('-ae', '--ae-epochs', default=3000, type=int, help='The number of epochs when run autoencoder')
     parser.add_argument('-v', '--num-views', default=100, type=int, help='The number of rendered views')
     parser.add_argument('-ns', '--num-shapes', default=-1, type=int, help='The number of shapes to test')
     parser.add_argument('--start-index', default=0, type=int, help='The start index to test')
     parser.add_argument('--seed', default=42, type=int, help='The seed to random choose evaluation shapes')
     # parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
-    parser.add_argument('-k', '--K-ratio', default=2, type=float, help='Set the default ')
     parser.add_argument('--log', default=None, help='The filepath for log file')
-
+    ## Tree3D options
+    parser.add_argument('-n', '--epochs', default=5000, type=int, help='The number of epochs when run tree3d')
+    parser.add_argument('-ae', '--ae-epochs', default=3000, type=int, help='The number of epochs when run autoencoder')
+    parser.add_argument('-k', '--K-ratio', default=2, type=float, help='Set the default ')
+    parser.add_argument('--gnn', default='GCN', help='The type of gnn')
+    parser.add_argument('--gnn-layers', default=2, type=int, help='The number of layers of gnn')
+    parser.add_argument('--gnn-hidden-dim', default=128, type=int, help='The hidden dimension of gnn')
+    parser.add_argument('-f', '--filename', default=None, help='The filename of tree3d results')
+    ##
     utils.add_bool_option(parser, '--gt-2d', help='Use GT 2D segmentation results')
     utils.add_bool_option(parser, '--force-3d', help='Force run 3d tree segment rather than use cached')
     utils.add_bool_option(parser, '--force-2d', help='Force run 2d tree segment rather than use cached')
@@ -470,7 +505,7 @@ def main():
     get_predictor(args, print=console.print)
 
     metric = TreeSegmentMetric()
-    for shape in tqdm(shapes):
+    for shape in tqdm(shapes, desc='Tree3D'):
         try:
             eval_one(
                 args,

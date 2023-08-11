@@ -231,7 +231,7 @@ class TreePredictor:
             return data
         for (points,) in batch_iterator(self.points_per_batch, points):
             batch_data = self._process_batch(points, self.original_size, normalized=normalized)
-            batch_data['masks'] = batch_data['masks'].cpu()  # to avoid oom
+            batch_data['masks'] = batch_data['masks']  #.cpu()  # to avoid oom
             data.cat(batch_data)
             del batch_data
 

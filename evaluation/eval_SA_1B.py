@@ -76,15 +76,16 @@ def main():
     images_paths = sorted(list(data_root.glob('*.jpg')))
     console.print(f'There are {len(images_paths)} images in dir: {data_root}')
     np.random.seed(42)
-    eval_image_paths = images_paths
+    eval_image_paths = images_paths[:args.number]
     # eval_image_paths = np.random.choice(images_paths, args.number)
-    print(f"Try To evaluate {len(eval_image_paths)} image")
+    N = len(eval_image_paths)
+    print(f"Try To evaluate {N} image")
 
     get_predictor(args, print=console.print)
     device = torch.device('cuda')
 
     metric = TreeSegmentMetric(is_resize_2d_as_gt=False)
-    timer = utils.TimeEstimator(args.number)
+    timer = utils.TimeEstimator(N)
     time_avg = utils.TimeWatcher()
     timer.start()
     time_avg.start()
@@ -140,7 +141,7 @@ def main():
         time_avg.log('metric')
         timer.step()
         if i % args.print_interval == 0:
-            console.print(f'Process [{i}/{args.number}], {timer.progress}')
+            console.print(f'Process [{i}/{N}], {timer.progress}')
             console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
 
     console.print('Complete Evalution')

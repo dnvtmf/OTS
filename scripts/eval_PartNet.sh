@@ -2,9 +2,9 @@
 
 start_index=(0 150 300 450 600 750 1000 1150 1300 1450)
 gpus=(0 1 2 3 4 5 6 7 8 9)
-args=(-ns=150 --max-split=10)
+args=(-ns=150 --max-steps=10)
 
-for (( i=0; i < 8; ++i ))
+for (( i=0; i < ${#gpus[@]}; ++i ))
 do
     echo use gpu${gpus[i]} start at ${start_index[i]}
     screen -S gpu${gpus[i]} -p 0 -X stuff \
@@ -12,7 +12,7 @@ do
         -o /data5/wan/PartNet_final/ --log log_start_${start_index[i]}_$(date +%m_%d_%H:%M:%S).txt \
         -ssl --stability_score_thresh=0.92 --points_per_batch=64 \
         -s ./results/PartNet_test.txt \
-        --start-index= ${start_index[i]} --image-size=512 \
+        --start-index=${start_index[i]} --image-size=512 \
         ${args[*]} \
         ^M"
 done

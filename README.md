@@ -73,9 +73,17 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 
 ### 8.10 work list
 - [ ] [3D] 快速2D分割 (failed)
-- [ ] [3D] view选择
-- [ ] [Paper] 插图绘制
+- [x] [3D] view选择
+- [x] [Paper] 插图绘制
 - [ ] [3D] 测试样本筛选
+
+### 8.11 work list
+- [ ] [3D] 不同类型GNN测试
+- [ ] [3D] 不同loss functions测试
+- [ ] [3D] 不同K测试
+- [x] [Paper] 完成PartNet的插图绘制
+- [ ] [Paper] 完成场景的插图绘制
+- [ ] [Paper] 完成实验部分撰写
 
 ### future
 - [ ] [2D] 测试automatic mask generator的结果

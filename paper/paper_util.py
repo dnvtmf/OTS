@@ -45,7 +45,7 @@ def save_2d_masks(save_dir: Path, image: Union[np.ndarray, Tensor], tree2d: Tree
         print(f'Saved 2d level {level} with nodes: {nodes.tolist()}')
 
 
-def save_3d_view(save_dir: Path, tree3d: Tree3Dv2, image: Union[np.ndarray, Tensor], tri_id: Tensor):
+def get_2d_tree_from_3d(tree3d: Tree3Dv2, tri_id: Tensor):
     aux_data = tree3d.get_aux_data(tri_id)
     levels = tree3d.get_levels(aux_data)
     masks = []
@@ -56,6 +56,12 @@ def save_3d_view(save_dir: Path, tree3d: Tree3Dv2, image: Union[np.ndarray, Tens
     tree2d = Tree2D(masks, torch.ones(masks.shape[0], device=tri_id.device), device=tri_id.device)
     tree2d.update_tree()
     tree2d.node_rearrange()
+    tree2d.post_process()
+    return tree2d
+
+
+def save_3d_view(save_dir: Path, tree3d: Tree3Dv2, image: Union[np.ndarray, Tensor], tri_id: Tensor):
+    tree2d = get_2d_tree_from_3d(tree3d, tri_id)
     save_2d_masks(save_dir, image, tree2d)
     print(f'There are {tree2d.cnt} masks in the view of tree3d ')
 
