@@ -506,20 +506,20 @@ def main():
 
     metric = TreeSegmentMetric()
     for shape in tqdm(shapes, desc='Tree3D'):
-        try:
-            eval_one(
-                args,
-                data_root.joinpath(shape),
-                cache_root=cache_root,
-                metric=metric,
-                num_views=args.num_views,
-                epochs_ea=args.ae_epochs,
-                epochs_run=args.epochs,
-                print=console.print,
-            )
-        except Exception as e:
-            console.print(f"[red] ERROR: {str(e)}")
-            torch.cuda.empty_cache()
+        # try:
+        eval_one(
+            args,
+            data_root.joinpath(shape),
+            cache_root=cache_root,
+            metric=metric,
+            num_views=args.num_views,
+            epochs_ea=args.ae_epochs,
+            epochs_run=args.epochs,
+            print=console.print,
+        )
+        # except Exception as e:
+        #     console.print(f"[red] ERROR: {str(e)}")
+        #     torch.cuda.empty_cache()
 
         console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
     if args.log:

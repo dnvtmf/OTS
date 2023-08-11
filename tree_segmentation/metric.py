@@ -42,31 +42,34 @@ class TreeSegmentMetric:
         else:
             raise NotImplementedError(f"prediction: {prediction.__class__.__name__}, gt: {gt.__class__.__name__}")
         N, M = IoU.shape
-        TS = self.calc_tree_structure_score(prediction, indices_pd)
+        if M == 0:
+            return
+        # TS = self.calc_tree_structure_score(prediction, indices_pd)
+        TS = self.calc_tree_structure_score_2(prediction, indices_pd)
         # assert 0 <= TS.min() and TS.max() <= 1. + 1e-4, f"{TS.aminmax()}"
         if not (0 <= TS.min() and TS.max() <= 1. + 1e-4):
             print(f"TS not in [0, 1]: {TS.aminmax()}")
         # get TQ
         matched_iou, matched = IoU.max(dim=1)
-        iou_ = torch.zeros_like(IoU)
-        iou_[torch.arange(N, device=iou_.device), matched] = matched_iou * (matched_iou >= self.iou_threshold)
-        iou_ = torch.cummax(iou_, dim=0)[0]
-        # print(TS.shape, iou_.shape)
-        TP = (iou_ > 0).sum(dim=1)
-        FP = torch.arange(N, device=TP.device, dtype=TP.dtype) + 1 - TP
-        FN = M - TP
-        iou_ = iou_.sum(dim=1)
-        SQ = iou_ / TP.clamp_min(self.eps)  # to avoid divided zero
-        RQ = TP / (TP + FP * 0.5 + FN * 0.5).clamp_min(self.eps)
-        PQ = iou_ / (TP + FP * 0.5 + FN * 0.5).clamp_min(self.eps)
-        TQ = PQ * TS
-        self.mSQ_sum += SQ.mean().item()
-        self.mRQ_sum += RQ.mean().item()
-        self.mPQ_sum += PQ.mean().item()
-        self.mTS_sum += TS.mean().item()
-        self.mTQ_sum += TQ.mean().item()
-        self.TS_sum += TS[-1].item()
-        self.TQ_sum += TQ[-1].item()
+        # iou_ = torch.zeros_like(IoU)
+        # iou_[torch.arange(N, device=iou_.device), matched] = matched_iou * (matched_iou >= self.iou_threshold)
+        # iou_ = torch.cummax(iou_, dim=0)[0]
+        # # print(TS.shape, iou_.shape)
+        # TP = (iou_ > 0).sum(dim=1)
+        # FP = torch.arange(N, device=TP.device, dtype=TP.dtype) + 1 - TP
+        # FN = M - TP
+        # iou_ = iou_.sum(dim=1)
+        # SQ = iou_ / TP.clamp_min(self.eps)  # to avoid divided zero
+        # RQ = TP / (TP + FP * 0.5 + FN * 0.5).clamp_min(self.eps)
+        # PQ = iou_ / (TP + FP * 0.5 + FN * 0.5).clamp_min(self.eps)
+        # TQ = PQ * TS
+        # self.mSQ_sum += SQ.mean().item()
+        # self.mRQ_sum += RQ.mean().item()
+        # self.mPQ_sum += PQ.mean().item()
+        # self.mTS_sum += TS.mean().item()
+        # self.mTQ_sum += TQ.mean().item()
+        self.TS_sum += TS  # TS[-1].item()
+        # self.TQ_sum += TQ[-1].item()
         # self.SQ_sum += SQ[-1].item()
         # self.RQ_sum += RQ[-1].item()
         # self.PQ_sum += PQ[-1].item()
@@ -81,9 +84,13 @@ class TreeSegmentMetric:
         FP = N - TP
         FN = M - TP
         iou = IoU[pred_idx, gt_idx].sum()
-        self.SQ_sum += iou / max(TP, self.eps)
-        self.RQ_sum += TP / max(TP + FP * 0.5 + FN * 0.5, self.eps)
-        self.PQ_sum += iou / max(TP + FP * 0.5 + FN * 0.5, self.eps)
+        SQ = iou / max(TP, self.eps)
+        RQ = TP / max(TP + FP * 0.5 + FN * 0.5, self.eps)
+        self.SQ_sum += SQ
+        self.RQ_sum += RQ
+        self.PQ_sum += SQ * RQ
+        self.TQ_sum += SQ * RQ * TS
+
         self.cnt += 1
         self.maxIoU_sum += matched_iou.mean().item()
 
@@ -276,6 +283,27 @@ class TreeSegmentMetric:
             # assert abs(now - check_score) < 1e-4, f"{abs(now - check_score)}"
         return scores * 0.5
 
+    def calc_tree_structure_score_2(self, p: Union[Tree2D, Tree3D, Tree3Dv2], indices: Tensor = None):
+        if indices is None:
+            indices = torch.cat(p.get_levels(), dim=0)[1:] - 1  # do not care root
+            order = torch.argsort(p.scores[indices], descending=True)  # sorted by score
+            indices = indices[order]
+
+        score = 0
+        for i in indices:
+            mask = p.masks[i - 1]
+            if p.parent[i] == 0:
+                conflict = torch.zeros_like(mask)
+            else:
+                conflict = torch.logical_and(mask, torch.logical_not(p.masks[p.parent[i] - 1]))
+            for c in p.get_children(i):
+                conflict = torch.logical_or(conflict, torch.logical_and(mask, p.masks[c - 1]))
+            if hasattr(p, 'area'):
+                score += (conflict[1:] * p.area).sum() / (mask[1:] * p.area).sum().clamp_min(self.eps)
+            else:
+                score += conflict.sum() / mask.sum().clamp_min(self.eps)
+        return 1 - (score / len(indices))
+
     @property
     def PQ(self):
         return self.PQ_sum / self.cnt if self.cnt > 0 else math.nan
@@ -296,25 +324,25 @@ class TreeSegmentMetric:
     def TQ(self):
         return self.TQ_sum / self.cnt if self.cnt > 0 else math.nan
 
-    @property
-    def mPQ(self):
-        return self.mPQ_sum / self.cnt if self.cnt > 0 else math.nan
+    # @property
+    # def mPQ(self):
+    #     return self.mPQ_sum / self.cnt if self.cnt > 0 else math.nan
 
-    @property
-    def mSQ(self):
-        return self.mSQ_sum / self.cnt if self.cnt > 0 else math.nan
+    # @property
+    # def mSQ(self):
+    #     return self.mSQ_sum / self.cnt if self.cnt > 0 else math.nan
 
-    @property
-    def mRQ(self):
-        return self.mRQ_sum / self.cnt if self.cnt > 0 else math.nan
+    # @property
+    # def mRQ(self):
+    #     return self.mRQ_sum / self.cnt if self.cnt > 0 else math.nan
 
-    @property
-    def mTS(self):
-        return self.mTS_sum / self.cnt if self.cnt > 0 else math.nan
+    # @property
+    # def mTS(self):
+    #     return self.mTS_sum / self.cnt if self.cnt > 0 else math.nan
 
-    @property
-    def mTQ(self):
-        return self.mTQ_sum / self.cnt if self.cnt > 0 else math.nan
+    # @property
+    # def mTQ(self):
+    #     return self.mTQ_sum / self.cnt if self.cnt > 0 else math.nan
 
     @property
     def mIoU(self):
@@ -327,10 +355,10 @@ class TreeSegmentMetric:
             'PQ': self.PQ,
             'TS': self.TS,
             'TQ': self.TQ,
-            'mSQ': self.mSQ,
-            'mRQ': self.mRQ,
-            'mPQ': self.mPQ,
-            'mTS': self.mTS,
-            'mTQ': self.mTQ,
+            # 'mSQ': self.mSQ,
+            # 'mRQ': self.mRQ,
+            # 'mPQ': self.mPQ,
+            # 'mTS': self.mTS,
+            # 'mTQ': self.mTQ,
             'mIoU': self.mIoU,
         }

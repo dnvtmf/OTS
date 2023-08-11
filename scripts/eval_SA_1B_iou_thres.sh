@@ -1,8 +1,8 @@
 #!/usr/bin/env zsh
 
 iou_thresholds=(0.9 0.85 0.8 0.75 0.7)
-gpus=(7 6 5 4 3)
-args=(--max-steps=100 --print-interval=10 -n=100 --data-root=~/data/SA_1B_test)
+gpus=(0 1 2 5 7)
+args=(--max-steps=100 --print-interval=10 -n=100 --data-root=~/data/SA_1B_test --uncompress --force)
 num_gpus=${#gpus[@]}
 output='./results/SA_1B_SemanticSAM_L_pred_iou_thresh'
 

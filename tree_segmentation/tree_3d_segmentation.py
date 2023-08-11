@@ -754,6 +754,10 @@ class Tree3Dv2(TreeStructure):
         print(f'[Tree3D] view_masks, view_infos[0]: {utils.show_shape(self.masks_view, self.view_infos[0])}')
         print(f"[Tree3D] loaded {self.V} views, {self.M} masks, max_num: {self.Lmax}")
         # print(utils.show_shape(self.face_masks.tensors, self.face_masks.index))
+        ## remove unseen faces # TODO: remove unseen faces to reduce compuation
+        # seen_faces = self.masks_view.any(dim=0)
+        # print(seen_faces.shape)
+        # self.area
         print('[Tree3D] GPU:', utils.get_GPU_memory())
         return
 

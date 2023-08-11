@@ -343,8 +343,6 @@ def load_ply(filename: Path):
                     for i in range(1, faces.shape[1] - 1):
                         f_pos.append(np.stack([faces[:, 0], faces[:, i], faces[:, i + 1]], axis=-1))
                     data['f_pos'] = np.stack(f_pos, axis=1).reshape(-1, 3)
-                    print(faces[:4])
-                    print(data['f_pos'][:8])
             else:
                 for ploy in faces:
                     for i in range(1, len(ploy) - 1):

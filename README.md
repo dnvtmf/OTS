@@ -82,7 +82,10 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [ ] [3D] 不同loss functions测试
 - [ ] [3D] 不同K测试
 - [x] [Paper] 完成PartNet的插图绘制
-- [ ] [Paper] 完成场景的插图绘制
+- [x] [Paper] 完成场景的插图绘制
+
+### 8.12 work list
+- [ ] [3D] 完成Replica实验
 - [ ] [Paper] 完成实验部分撰写
 
 ### future
