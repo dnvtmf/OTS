@@ -1,31 +1,26 @@
 import argparse
 import json
 import math
-import os
+import struct
+import time
 from pathlib import Path
-from typing import Optional
-import matplotlib.pyplot as plt
 
+import numpy as np
 import nvdiffrast.torch as dr
 import torch
-from torch import Tensor
-import torch.nn.functional as F
-import numpy as np
-from tqdm import tqdm
-from rich.console import Console
-from rich.tree import Tree
-import torch_geometric as pyg
 import torch_geometric.nn as pyg_nn
-import open3d as o3d
-import struct
 import trimesh
 import trimesh.proximity
+from rich.console import Console
+from rich.tree import Tree
+from torch import Tensor
+from tqdm import tqdm
 
-from tree_segmentation.extension import Mesh, utils, ops_3d
-from tree_segmentation import Tree3Dv2, Tree3D, render_mesh, TreePredictor, Tree2D, choose_best_views, random_camera_position
+from evaluation.util import get_predictor, predictor_options, run_predictor
+from tree_segmentation import (Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, random_camera_position,
+                               render_mesh)
+from tree_segmentation.extension import Mesh, ops_3d, utils
 from tree_segmentation.metric import TreeSegmentMetric
-
-from evaluation.util import run_predictor, predictor_options, get_predictor
 
 device = torch.device("cuda")
 glctx = dr.RasterizeCudaContext()
@@ -120,7 +115,8 @@ def load_mesh_and_gt(data_dir: Path, cache_dir: Path, force=False):
     mesh.float()
 
     if not force and cache_dir.joinpath('gt.tree3dv2').exists():
-        gt = torch.load(cache_dir.joinpath('gt.tree3dv2'))
+        gt = Tree3Dv2(mesh=mesh, device=device)
+        gt.load(cache_dir.joinpath('gt.tree3dv2'))
         print('Load GT from', cache_dir.joinpath('gt.tree3dv2'))
     else:
         full_mesh = Mesh.load(data_dir.joinpath('mesh.ply')).to_trimesh()
@@ -229,7 +225,7 @@ def options():
     parser.add_argument('-s', '--scene', default='room_1', help='The scene to evaluate')
     parser.add_argument('--seed', default=42, type=int, help='The seed to random choose evaluation shapes')
     # parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
-    parser.add_argument('--log', default=None, help='The filepath for log file')
+    parser.add_argument('--log', default='log', help='The filepath for log file')
     # rendering options
     parser.add_argument('-v', '--num-views', default=100, type=int, help='The number of rendered views')
     # parser.add_argument('--num-faces', default=500_000, help='Try to simplify the number of faces for the mesh')
@@ -282,7 +278,6 @@ def main():
     ## load mesh
     mesh, gt = load_mesh_and_gt(data_dir, cache_dir)
     mesh = mesh.to(device).unit_size()
-    console.print(mesh)
     roate_angle = {
         'office_0': 5,
         'office_1': 34,
@@ -296,6 +291,7 @@ def main():
     mesh.v_pos = ops_3d.xfm(mesh.v_pos, ops_3d.rotate_z(-math.radians(roate_angle), device))[:, :3].contiguous()
     mesh.v_pos = mesh.v_pos[:, (0, 2, 1)].contiguous()
     mesh = mesh.unit_size()
+    console.print(mesh)
     console.print(mesh.AABB)
     console.print('[Mesh] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
 
@@ -317,6 +313,7 @@ def main():
             images, tri_ids, Tw2vs = load_images(mesh, image_dir, num_views=args.num_views)
         console.print('[Image] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
 
+        print(mesh.f_pos.shape, tri_ids.max())
         # 2D Segmentation
         if run_2d:
             run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
@@ -410,12 +407,13 @@ def main():
         console.print(f"save tree3d results to {save_path}")
         del A, X
     metric = TreeSegmentMetric()
-    gt = load_instance_segmentaion_gt(data_dir, mesh, cache_dir)
-    gt2 = load_semantic_gt(data_dir, mesh, cache_dir)
+    gt.mesh = tree3d.mesh
+    gt.area = tree3d.area
     metric.update(tree3d, gt.to(device))
     console.print(', '.join(f"{k}={v}" for k, v in metric.summarize().items()))
     if args.log:
-        console.save_text(cache_dir.joinpath(args.log))
+        now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
+        console.save_text(cache_dir.joinpath(f"{args.log}_{now_date}.txt"))
 
 
 if __name__ == '__main__':

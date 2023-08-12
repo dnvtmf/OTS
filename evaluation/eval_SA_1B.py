@@ -1,3 +1,4 @@
+import time
 import argparse
 import json
 from pathlib import Path
@@ -41,7 +42,7 @@ def options():
     # parser.add_argument('--eval-part', default=110, type=int, help='The part index of SA-1B to evaluate')
     parser.add_argument('--seed', default=42, type=int, help='The seed to random choose evaluation images')
     parser.add_argument('-n', '--number', default=1000, type=int, help='The number of images to evaluate')
-    parser.add_argument('--log', default='log.txt', help='The filename for log file')
+    parser.add_argument('--log', default='log', help='The filename for log file')
     parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
     utils.add_bool_option(parser, '--force', default=False, help='Force run generate')
     utils.add_bool_option(parser, '--uncompress', default=False, help='Donot compress the results')
@@ -150,7 +151,9 @@ def main():
         console.print(f"{k:5s}: {v}")
     console.print('average masks:', np.mean(num_masks))
     console.print('ignore rate:', ignore_rate / max(1, num_count))
-    console.save_text(save_dir.joinpath(args.log))
+
+    now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
+    console.save_text(save_dir.joinpath(f"{args.log}_{now_date}.txt"))
 
 
 if __name__ == '__main__':

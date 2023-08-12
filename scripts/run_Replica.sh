@@ -16,9 +16,5 @@ for (( i=0; i < ${num_gpus}; ++i ))
 do
     echo "Run scene ${scenes[i]} on gpu ${gpus[i]}"
     screen -S gpu${gpus[i]} -p 0 -X stuff \
-    "python evaluation/eval_Replica.py  \
-    -o ${output} --log log_$(date +%m_%d_%H:%M:%S).txt \
-    --scene ${scenes[i]} \
-    ${args[*]} \
-    ^M"
+        "python evaluation/eval_Replica.py -o ${output} --scene ${scenes[i]} ${args[*]} ^M"
 done 

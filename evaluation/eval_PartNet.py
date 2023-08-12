@@ -2,28 +2,23 @@ import argparse
 import json
 import math
 import os
+import time
 from pathlib import Path
-from typing import Optional
-import matplotlib.pyplot as plt
-import traceback
-import sys
 
+import numpy as np
 import nvdiffrast.torch as dr
 import torch
-from torch import Tensor
 import torch.nn.functional as F
-import numpy as np
-from tqdm import tqdm
+import torch_geometric.nn as pyg_nn
 from rich.console import Console
 from rich.tree import Tree
-import torch_geometric as pyg
-import torch_geometric.nn as pyg_nn
+from torch import Tensor
+from tqdm import tqdm
 
-from tree_segmentation.extension import Mesh, utils, ops_3d
-from tree_segmentation import Tree3Dv2, Tree3D, render_mesh, TreePredictor, Tree2D, choose_best_views
+from evaluation.util import get_predictor, predictor_options, run_predictor
+from tree_segmentation import Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, render_mesh
+from tree_segmentation.extension import Mesh, ops_3d, utils
 from tree_segmentation.metric import TreeSegmentMetric
-
-from evaluation.util import run_predictor, predictor_options, get_predictor
 
 device = torch.device("cuda")
 glctx = dr.RasterizeCudaContext()
@@ -355,7 +350,9 @@ def eval_one(args,
     if args.filename is None:
         save_path = cache_dir.joinpath('gt_seg.tree3dv2' if args.gt_2d else 'my.tree3dv2')
     else:
-        save_path = cache_dir.joinpath(args.filename).with_suffix('.tree3dv2')
+        save_path = cache_dir.joinpath(args.filename)
+    if save_path.suffix != '.tree3dv2':
+        save_path = cache_dir.joinpath(save_path.name + '.tree3dv2')
     tree3d = Tree3Dv2(mesh, device=device)
     if not args.force_3d and save_path.exists():
         tree3d.load(save_path)
@@ -452,7 +449,7 @@ def options():
     parser.add_argument('--start-index', default=0, type=int, help='The start index to test')
     parser.add_argument('--seed', default=42, type=int, help='The seed to random choose evaluation shapes')
     # parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
-    parser.add_argument('--log', default=None, help='The filepath for log file')
+    parser.add_argument('--log', default='log', help='The filename for log file')
     ## Tree3D options
     parser.add_argument('-n', '--epochs', default=5000, type=int, help='The number of epochs when run tree3d')
     parser.add_argument('-ae', '--ae-epochs', default=3000, type=int, help='The number of epochs when run autoencoder')
@@ -491,7 +488,7 @@ def main():
     console.print(f"Data Root: {data_root}")
 
     cache_root = Path(args.output).expanduser()
-    cache_root.mkdir(exist_ok=True)
+    cache_root.mkdir(exist_ok=True, parents=True)
     console.print(f"The middle results will cache in: {cache_root}")
 
     if args.split == '' or not os.path.exists(args.split):
@@ -528,7 +525,8 @@ def main():
 
         console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
     if args.log:
-        console.save_text(cache_root.joinpath(args.log))
+        now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
+        console.save_text(cache_root.joinpath(f"{args.log}_{now_date}.txt"))
 
 
 if __name__ == '__main__':

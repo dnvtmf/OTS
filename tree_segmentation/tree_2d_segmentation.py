@@ -687,7 +687,7 @@ class Tree2D(TreeStructure):
         self._areas = None
         self.num_samples = data.pop('num_samples')
         extra = data.pop('extra')
-        self._is_compressed = len(self._masks) != len(self.scores)
+        self._is_compressed = (len(self._masks) != len(self.scores)) or (self._masks.dtype != torch.bool)
         self.to(self.device)
         if self.verbose > 0:
             print(f'[Tree2D] loaded from file {filename} or input data')

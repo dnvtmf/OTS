@@ -691,9 +691,9 @@ class Tree3Dv2(TreeStructure):
             tree2d.remove_background(tri_id.eq(0), background_threshold)
             # tree2d.compress()
 
-            # print(f'view: {vid}', utils.get_GPU_memory(), tree2d.cnt)
             masks = tree2d.masks
-            assert masks.ndim == 3
+            # print(f'view: {vid}', utils.get_GPU_memory(), tree2d.cnt, utils.show_shape(masks), tree2d.is_compressed)
+            assert masks.ndim == 3 and masks.dtype == torch.bool
             num_masks_start = self.M
             num_levels = 0
             for level, nodes in enumerate(tree2d.get_levels()):
@@ -701,10 +701,18 @@ class Tree3Dv2(TreeStructure):
                     continue
                 mask_2d.zero_()
                 for i in nodes:
-                    faces, cnts = torch.unique(tri_id[masks[i - 1]], return_counts=True)
+                    faces, cnts = torch.unique(tri_id * masks[i - 1], return_counts=True)
+                    assert 0 <= faces.min() and faces.max() < len(temp), f"view: {vid}, {faces.max()} vs {len(temp)}"
                     temp.zero_()
                     temp[faces.long()] = cnts.float()
+                    # temp2 = torch.zeros_like(temp)
+                    # faces2, cnts2 = torch.unique(tri_id[masks[i - 1]], return_counts=True)
+                    # temp2[faces2] = cnts2.float()
+                    # print((temp2[1:] - temp[1:]).abs().max())
                     # faces_masks_v.append(temp[v_faces] / v_cnts)
+                    # temp.scatter_reduce_(0,
+                    #                      (tri_id.long() * (masks[i - 1])).view(-1), torch.ones_like(tri_id, dtype=torch.float),
+                    #  'sum')
                     temp[v_faces] /= v_cnts
                     temp[0] = 0
                     self.M += 1
@@ -1025,7 +1033,7 @@ class Tree3Dv2(TreeStructure):
             # print('recon', utils.show_shape(recon), reco_loss)
             # print('loss:', loss)
 
-            losses['recon'] = F.binary_cross_entropy_with_logits(masks_pred, masks_gt.float())
+            losses['recon'] = F.binary_cross_entropy_with_logits(masks_pred.float(), masks_gt.float())
             metric.update(losses)
             scaler.scale(utils.sum_losses(losses)).backward()
             scaler.step(opt)
@@ -1239,7 +1247,6 @@ class Tree3Dv2(TreeStructure):
 
     def loss_tree(self, masks: Tensor, scores: Tensor, eps=1e-7):
         """let masks to be a tree"""
-        # TODO: make tree struct, then calcutate loss
         areas = masks[:, 1:] @ self.area
         inter = F.linear(masks[:, 1:], masks[:, 1:] * self.area)
         IoU = inter / (areas[:, None] + areas[None, :] - inter).clamp_min(eps)
@@ -1438,7 +1445,7 @@ class Tree3Dv2(TreeStructure):
             self.scores, indices = torch.sort(scores, descending=True)
             if gnn is not None:
                 gnn.eval()
-                S = gnn(X, edges, edge_weight=edge_weight)[:self.M]
+                S = gnn(X.float(), edges, edge_weight=edge_weight)[:self.M]
             if topP:
                 values, indices = torch.topk(S, k=1, dim=1)
                 P = torch.scatter(torch.zeros_like(S), 1, indices, values.softmax(dim=1))
@@ -1449,6 +1456,7 @@ class Tree3Dv2(TreeStructure):
         # TODO: 过滤掉没有对应的Masks
         self.masks = masks >= 0.5
         self.masks_area = torch.mv(self.masks[:, 1:].float(), self.area)
+        self.scores *= self.masks_area > 0  # remove empty mask
         self.cnt = 0
         self.first[0] = -1
         self.resize(K + 1)
