@@ -335,7 +335,7 @@ def load_ply(filename: Path):
         elif elem['name'] == 'face':
             f_pos = []
             faces = elem['data'][elem['names'].index('vertex_indices')]
-            print(type(faces), faces.shape)
+            # print(type(faces), faces.shape)
             if isinstance(faces, np.ndarray):
                 if faces.shape[1] == 3:
                     data['f_pos'] = faces

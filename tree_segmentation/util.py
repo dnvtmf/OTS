@@ -145,4 +145,6 @@ def show_all_levels(image, tree: Union[Tree3D, Tree3Dv2, Tree2D], tri_id=None, d
 
 
 def get_hash_name(filepath: Path) -> str:
-    return hashlib.md5(str(filepath.resolve()).encode()).hexdigest()
+    # return hashlib.md5(str(filepath.absolute()).encode()).hexdigest()
+    parts = filepath.parts
+    return f"{parts[-3]}_{parts[-2]}_{filepath.stem}"

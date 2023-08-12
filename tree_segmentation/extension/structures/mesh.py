@@ -109,6 +109,24 @@ class Mesh:
             vertex_colors=self.v_clr.cpu().numpy() if self.v_clr is not None else None,
         )
 
+    @classmethod
+    def from_trimesh(cls, mesh) -> 'Mesh':
+        import trimesh
+        import trimesh.visual
+        mesh: trimesh.Trimesh = mesh
+        data = {
+            'v_pos': torch.from_numpy(mesh.vertices.copy()).float(),
+            'f_pos': torch.from_numpy(mesh.faces.copy()).int(),
+        }
+        data['v_nrm'] = torch.from_numpy(mesh.vertex_normals.copy()).float()
+        data['f_nrm'] = data['f_pos'].clone()
+        visual = mesh.visual
+        if isinstance(visual, trimesh.visual.ColorVisuals):
+            data['v_clr'] = torch.from_numpy(visual.vertex_colors.copy()).float() / 255.
+        else:
+            raise NotImplementedError()
+        return cls(**data)
+
     def check(self):
         assert self.v_pos.ndim == 2 and self.v_pos.shape[1] == 3
         assert self.f_pos.ndim == 2 and self.f_pos.shape[1] == 3
@@ -166,21 +184,21 @@ class Mesh:
         for attr in ['f_pos', 'f_nrm', 'f_tex', 'f_tng', 'f_mat']:
             v = getattr(self, attr)
             if v is not None:
-                v.int()
+                setattr(self, attr, v.int())
         return self
 
     def long(self):
         for attr in ['f_pos', 'f_nrm', 'f_tex', 'f_tng', 'f_mat']:
             v = getattr(self, attr)
             if v is not None:
-                v.long()
+                setattr(self, attr, v.long())
         return self
 
     def float(self):
         for attr in ['v_pos', 'v_nrm', 'v_tex', 'v_tng', 'v_clr']:
             v = getattr(self, attr)
             if v is not None:
-                v.float()
+                setattr(self, attr, v.float())
         return self
 
     def bound(self):

@@ -79,14 +79,17 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 
 ### 8.11 work list
 - [ ] [3D] 不同类型GNN测试
-- [ ] [3D] 不同loss functions测试
-- [ ] [3D] 不同K测试
+- [x] [3D] 不同loss functions测试
 - [x] [Paper] 完成PartNet的插图绘制
 - [x] [Paper] 完成场景的插图绘制
 
 ### 8.12 work list
+- [ ] [3D] 不同K测试
+- [ ] [3D] 修改tree loss
 - [ ] [3D] 完成Replica实验
-- [ ] [Paper] 完成实验部分撰写
+- [ ] [Paper] 完成方法和实验部分撰写
+- [ ] [3D] PaperNet上测试所有2D结果的准确率
+- [ ] [3D] PaperNet上测试所有gt_seg的准确率
 
 ### future
 - [ ] [2D] 测试automatic mask generator的结果

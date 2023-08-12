@@ -17,6 +17,9 @@ from rich.tree import Tree
 import torch_geometric as pyg
 import torch_geometric.nn as pyg_nn
 import open3d as o3d
+import struct
+import trimesh
+import trimesh.proximity
 
 from tree_segmentation.extension import Mesh, utils, ops_3d
 from tree_segmentation import Tree3Dv2, Tree3D, render_mesh, TreePredictor, Tree2D, choose_best_views, random_camera_position
@@ -26,6 +29,7 @@ from evaluation.util import run_predictor, predictor_options, get_predictor
 
 device = torch.device("cuda")
 glctx = dr.RasterizeCudaContext()
+console = None
 
 
 def get_images_best_view(
@@ -111,11 +115,111 @@ def run_2d_segmentation(cache_dir: Path, images: Tensor, tri_ids: Tensor, Tw2vs:
     return
 
 
-def load_instance_segmentaion_gt(data_root: Path):
-    pass
+def load_mesh_and_gt(data_dir: Path, cache_dir: Path, force=False):
+    mesh = Mesh.load(data_dir.joinpath('simplify.ply'))
+    mesh.float()
+
+    if not force and cache_dir.joinpath('gt.tree3dv2').exists():
+        gt = torch.load(cache_dir.joinpath('gt.tree3dv2'))
+        print('Load GT from', cache_dir.joinpath('gt.tree3dv2'))
+    else:
+        full_mesh = Mesh.load(data_dir.joinpath('mesh.ply')).to_trimesh()
+        semantic_mesh_path = data_dir.joinpath('habitat/mesh_semantic.ply')
+        assert semantic_mesh_path.exists()
+        semantic_data = utils.parse_ply(semantic_mesh_path)
+        # print(utils.show_shape(semantic_data))
+        assert semantic_data[1]['name'] == 'face' and semantic_data[1]['names'][1] == 'object_id'
+        semantic_label = semantic_data[1]['data'][1]  # type: np.ndarray
+        semantic_label = np.repeat(
+            semantic_label[:, None], semantic_data[1]['data'][0].shape[1] - 2, axis=1).reshape(-1)
+        # # print(semantic_label[:10])
+        # print('semantic_label', utils.show_shape(semantic_label))
+
+        print(utils.show_shape(full_mesh.vertices, full_mesh.faces))
+        v_pos = mesh.v_pos[mesh.f_pos].mean(1).cpu().numpy().reshape(-1, 3)  # center of triangles
+        closest, dist, tri_id = trimesh.proximity.closest_point(full_mesh, v_pos)
+        # print('closest_point', utils.show_shape(tri_id))
+        masks = []
+        for i in np.unique(semantic_label):
+            obj_i = semantic_label == i
+            mask_i = obj_i[tri_id]
+            if mask_i.any():
+                masks.append(mask_i)
+
+        gt = Tree3Dv2(mesh, device=device)
+        gt.masks = torch.zeros((len(masks), gt.num_faces + 1), device=device, dtype=torch.bool)
+        gt.scores = torch.ones((len(masks),), device=device)
+        gt.resize(len(masks) + 1)
+        for i in range(len(masks)):
+            gt.node_insert(gt.node_new(), 0)
+            gt.masks[i, 1:] = torch.from_numpy(masks[i]).bool().to(device)
+        gt.save(cache_dir.joinpath('gt.tree3dv2'))
+    return mesh, gt
 
 
-console = None
+def load_semantic_gt(data_dir: Path, mesh: Mesh, cache_dir: Path):
+    print('Load gt')
+    with data_dir.joinpath('semantic.bin').open('rb') as f:
+        labels = np.array(list(struct.iter_unpack('@Q', f.read())), dtype=np.uint64).astype(np.int32)
+        print(labels.shape, labels.dtype)
+        assert 0 <= labels.min() and labels.max() < mesh.f_pos.shape[0] // 2
+    with data_dir.joinpath('semantic.json').open('r') as f:
+        semantic_info = json.load(f)
+    print(list(semantic_info.keys()))
+    children = []
+    parent = []
+    names = []
+    numPrimitives = []
+    for obj in semantic_info['segmentation']:
+        idx = obj['id']
+        while len(children) <= idx:
+            children.append([])
+            parent.append(-1)
+            names.append([''])
+            numPrimitives.append(0)
+        parent[idx] = -1 if obj['parent'] == '' else int(obj['parent'])
+        children[idx] = [int(c) for c in obj['children']]
+        names[idx] = obj['class']
+        numPrimitives[idx] = obj['numPrimitives']
+        if len(obj['children']) > 0:
+            assert obj['numPrimitives'] == 0
+    numPrimitives = np.array(numPrimitives)
+    print(numPrimitives.shape, numPrimitives.dtype)
+    prefix_sum = np.cumsum(numPrimitives) - numPrimitives
+    print(prefix_sum[:10], numPrimitives[:10])
+    for i in range(len(children)):
+        for c in children[i]:
+            assert parent[c] == i
+
+    gt = Tree3D(mesh, device=device)
+    gt.resize(len(children) + 1)
+
+    def _make_tree(
+        p,
+        tree_idx,
+    ):
+        for c in children[p]:
+            ci = gt.node_new()
+            gt.node_insert(ci, tree_idx)
+            _make_tree(c, ci)
+        if len(children[p]) == 0:
+            s = prefix_sum[p]
+            e = s + numPrimitives[p]
+            for i in range(s, e):
+                gt.face_parent[labels[i] * 2 + 1] = tree_idx
+                gt.face_parent[labels[i] * 2 + 2] = tree_idx
+
+    for i in range(len(parent)):
+        if parent[i] == -1:
+            idx = gt.node_new()
+            gt.node_insert(idx, 0)
+            _make_tree(i, idx)
+    # console.print(show_tree)
+    # gt.print_tree()
+    # gt.save(cache_dir.joinpath('gt2.tree3d'))
+    gt_v2 = Tree3Dv2.convert(gt)
+    gt_v2.save(cache_dir.joinpath('gt2.tree3dv2'))
+    return gt_v2
 
 
 def options():
@@ -128,7 +232,7 @@ def options():
     parser.add_argument('--log', default=None, help='The filepath for log file')
     # rendering options
     parser.add_argument('-v', '--num-views', default=100, type=int, help='The number of rendered views')
-    parser.add_argument('--num-faces', default=-1, help='Try to simplify the number of faces for the mesh')
+    # parser.add_argument('--num-faces', default=500_000, help='Try to simplify the number of faces for the mesh')
     utils.add_bool_option(parser, '--force-view', help='Force run view generateiong rather than use cached')
     parser.add_argument('--fovy', default=90, type=float)
     utils.add_n_tuple_option(parser, '--thetas', default=[30, 150])
@@ -176,18 +280,9 @@ def main():
     get_predictor(args, print=console.print)
 
     ## load mesh
-    mesh = Mesh.load(data_dir.joinpath('mesh.ply'))
-    mesh.float()
-    mesh.int()
-    console.print(mesh)
-    if args.num_faces > 0:
-        mesh_ = mesh.to_open3d()
-        mesh_smp = mesh_.simplify_quadric_decimation(target_number_of_triangles=args.num_faces, maximum_error=0.1)
-        o3d.io.write_triangle_mesh(cache_dir.joinpath('simplified.ply').as_posix(), mesh_smp)
-        mesh = mesh.from_open3d(mesh_smp)
-        console.print(f'Simplify mesh:', mesh)
+    mesh, gt = load_mesh_and_gt(data_dir, cache_dir)
     mesh = mesh.to(device).unit_size()
-    console.print(mesh.AABB)
+    console.print(mesh)
     roate_angle = {
         'office_0': 5,
         'office_1': 34,
@@ -237,10 +332,34 @@ def main():
     if not args.force_3d and save_path.exists():
         tree3d.load(save_path)
     else:
-        tree3d.load_2d_results(cache_dir)
+        tree3d.load_2d_results(cache_dir, pack=True)
+        # save memory
+        # view_mask = tree3d.masks_view.any(dim=0)
+        # view_mask[0] = 1
+        # print(view_mask.shape, view_mask.sum() / view_mask.shape[0])
+        # tree3d.area = tree3d.area[view_mask[1:]]
+        # tree3d.masks_view = tree3d.masks_view[:, view_mask]
+        # tree3d.masks_2d = tree3d.masks_2d[:, view_mask]
+        # print(utils.show_shape(tree3d.area, tree3d.masks_view, tree3d.masks_2d))
+        # tree3d.num_faces = view_mask.sum() - 1
+        # if tree3d._masks_2d_packed:
+        #     indices = torch.nonzero(tree3d.masks_2d)
+        #     tree3d._masks_2d_sp = torch.sparse.FloatTensor(
+        #         torch.stack([tree3d.masks_2d[indices[:, 0], indices[:, 1]] - 1, indices[:, 1]]),
+        #         torch.ones(indices.shape[0], device=indices.device),
+        #         [tree3d.M, tree3d.num_faces + 1],
+        #     )
+
         # Gv = tree3d.build_view_graph()
         # Gm = tree3d.build_graph(Gv)
-        A = tree3d.build_all_graph()
+        A_file = cache_dir.joinpath('A.pth')
+        if A_file.exists() and not run_2d:
+            A = torch.load(A_file, map_location=device)
+            console.print('Load A from:', A_file)
+        else:
+            A = tree3d.build_all_graph()
+            torch.save(A, A_file)
+            console.print('Save A to:', A_file)
         X_file = cache_dir.joinpath('X.pth')
         if X_file.exists() and not run_2d:
             X = torch.load(X_file, map_location=device)
@@ -282,11 +401,19 @@ def main():
             weights=args.loss_weights,
             print=print,
         )
+
+        # masks = tree3d.masks
+        # tree3d.masks = torch.zeros((masks.shape[0], mesh.f_pos.shape[0] + 1), dtype=torch.bool, device=masks.device)
+        # tree3d.masks[:, view_mask] = masks
+
         tree3d.save(save_path)
         console.print(f"save tree3d results to {save_path}")
         del A, X
-    # metric.update(tree3d, gt.to(device))
-    # return
+    metric = TreeSegmentMetric()
+    gt = load_instance_segmentaion_gt(data_dir, mesh, cache_dir)
+    gt2 = load_semantic_gt(data_dir, mesh, cache_dir)
+    metric.update(tree3d, gt.to(device))
+    console.print(', '.join(f"{k}={v}" for k, v in metric.summarize().items()))
     if args.log:
         console.save_text(cache_dir.joinpath(args.log))
 

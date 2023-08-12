@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import List, Tuple, Optional, Sequence, Dict
 
 import torch
+import torch.amp
 from torch import nn, Tensor
 import torch.nn.functional as F
 from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
@@ -948,14 +949,20 @@ class Tree3Dv2(TreeStructure):
         # view-mask
         if self._masks_2d_packed:
             areas_m = torch.zeros((self.M + 1), device=self.device)
-            for i in range(len(self.masks_2d)):
-                areas_m.scatter_reduce_(0, self.masks_2d[i, 1:].long(), self.area, 'sum')
+            # for i in range(len(self.masks_2d)):
+            #     areas_m.scatter_reduce_(0, self.masks_2d[i, 1:].long(), self.area, 'sum')
+            for i in range(self.M):
+                mask = self.masks_2d[self.indices_2d[i]] == (i + 1)
+                areas_m[i + 1] = torch.sum(mask[1:] * self.area)
             temp = torch.zeros((self.M + 1), device=self.device)
             for i in range(self.V):
                 masks_2d = self.masks_2d * self.masks_view[i]
                 temp.zero_()
-                for j in range(len(masks_2d)):
-                    temp.scatter_reduce_(0, masks_2d[j, 1:].long(), self.area, 'sum')
+                # for j in range(len(masks_2d)):
+                #     temp.scatter_reduce_(0, masks_2d[j, 1:].long(), self.area, 'sum')
+                for j in range(self.M):
+                    mask = masks_2d[self.indices_2d[j]] == (j + 1)
+                    temp[j + 1] = torch.sum(mask[1:] * self.area)
                 A[:M, M + i] = temp[1:] / areas_m[1:].clamp_min(1e-7)
         else:
             areas_m = torch.mv(self.masks_2d[:, 1:], self.area)[:, None].clamp_min(1e-7)
@@ -973,7 +980,9 @@ class Tree3Dv2(TreeStructure):
 
         autoencoder.train()
         N = self.M + (self.V if include_views else 0)
+        scaler = torch.cuda.amp.GradScaler()
         for epoch in range(epochs):
+            opt.zero_grad(set_to_none=True)
             losses = {}
             # threshold = torch.rand(1, device=device)
             # edges = torch.nonzero(A.gt(threshold))
@@ -985,7 +994,7 @@ class Tree3Dv2(TreeStructure):
             indices = torch.randint(0, N, (batch_size,), device=self.device)
             indicesM = indices[indices < self.M] if include_views else indices
             if self._masks_2d_packed:
-                masks_gt = (self.masks_2d[self.indices_2d[indicesM], 1:]).eq(indicesM[:, None] + 1).float()
+                masks_gt = (self.masks_2d[self.indices_2d[indicesM], 1:]).eq(indicesM[:, None] + 1)
             else:
                 masks_gt = self.masks_2d[indicesM, 1:].to(self.device)
             if include_views and len(indices) != len(indicesM):
@@ -993,7 +1002,8 @@ class Tree3Dv2(TreeStructure):
                 masks_gt = torch.cat([masks_gt, self.masks_view[indicesV, 1:].to(masks_gt)], dim=0)
             ## TODO: random project to some view
             # print(utils.show_shape(masks_gt))
-            features_, masks_pred = autoencoder(masks_gt)
+            with torch.autocast(device_type='cuda', dtype=torch.float16):
+                features_, masks_pred = autoencoder(masks_gt.half())
             # print('features', utils.show_shape(features))
 
             # view_f = encoder(view_masks[:, 1:])
@@ -1015,11 +1025,11 @@ class Tree3Dv2(TreeStructure):
             # print('recon', utils.show_shape(recon), reco_loss)
             # print('loss:', loss)
 
-            losses['recon'] = F.binary_cross_entropy_with_logits(masks_pred, masks_gt)
+            losses['recon'] = F.binary_cross_entropy_with_logits(masks_pred, masks_gt.float())
             metric.update(losses)
-            opt.zero_grad()
-            utils.sum_losses(losses).backward()
-            opt.step()
+            scaler.scale(utils.sum_losses(losses)).backward()
+            scaler.step(opt)
+            scaler.update()
             lr_scheduler.step()
             if epoch % 100 == 0:
                 print(f'[Tree3D] X epoch[{epoch:4d}], loss: {metric.average}, lr={lr_scheduler.get_last_lr()[0]:.3e}')
@@ -1029,13 +1039,15 @@ class Tree3Dv2(TreeStructure):
         with torch.no_grad():
             for indices in torch.arange(self.M, device=self.device).split(batch_size * 2, dim=0):
                 if self._masks_2d_packed:
-                    masks = (self.masks_2d[self.indices_2d[indices], 1:]).eq(indices[:, None] + 1).float()
+                    masks = (self.masks_2d[self.indices_2d[indices], 1:]).eq(indices[:, None] + 1)
                 else:
                     masks = self.masks_2d[indices, 1:]
-                X.append(autoencoder(masks, only_encoder=True))
+                with torch.autocast(device_type='cuda', dtype=torch.float16):
+                    X.append(autoencoder(masks.half(), only_encoder=True))
             if include_views:
                 for indices in torch.arange(self.V, device=self.device).split(batch_size * 2, dim=0):
-                    X.append(autoencoder(self.masks_view[indices, 1:].float(), only_encoder=True))
+                    with torch.autocast(device_type='cuda', dtype=torch.float16):
+                        X.append(autoencoder(self.masks_view[indices, 1:].half(), only_encoder=True))
         X = torch.cat(X, dim=0)
         print('[Tree3D] Features of face masks:', utils.show_shape(X))
         # self.X = X
@@ -1196,8 +1208,10 @@ class Tree3Dv2(TreeStructure):
         # gt = torch.zeros_like(scores, requires_grad=False)
         # gt[idx3d] = 1
         # 最大匹配
-        predicton, indices = match_scores.max(dim=1)
-        gt = torch.zeros_like(scores, requires_grad=False)
+        predicton = match_scores.amax(dim=1)
+        indices = match_scores.argmax(dim=0)
+        gt = torch.zeros_like(predicton, requires_grad=False)
+        assert 0 <= indices.min() and indices.max() < len(scores)
         gt[indices] = 1
         return F.mse_loss(predicton * scores, gt)
 
@@ -1390,7 +1404,7 @@ class Tree3Dv2(TreeStructure):
                 # print(f"view_index: {view_index}")
                 opt.zero_grad()
                 if gnn is not None:
-                    S = gnn(X, edges, edge_weight=edge_weight)[:self.M]
+                    S = gnn(X.float(), edges, edge_weight=edge_weight)[:self.M]
                     timer.log('gnn')
                 # print('[Tree3D]', S.aminmax(), X.aminmax(), edge_weight.aminmax())
                 # loss_dict = self.loss_fn(S, node_score)
