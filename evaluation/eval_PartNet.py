@@ -1,6 +1,7 @@
 import argparse
 import json
 import math
+import multiprocessing as mp
 import os
 import time
 from pathlib import Path
@@ -19,9 +20,6 @@ from evaluation.util import get_predictor, predictor_options, run_predictor
 from tree_segmentation import Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, render_mesh
 from tree_segmentation.extension import Mesh, ops_3d, utils
 from tree_segmentation.metric import TreeSegmentMetric
-
-device = torch.device("cuda")
-glctx = dr.RasterizeCudaContext()
 
 
 def get_ground_truth(data, gt_tree: Tree3D, tree: Tree, part_names, part_map, node=0):
@@ -55,7 +53,7 @@ def get_ground_truth(data, gt_tree: Tree3D, tree: Tree, part_names, part_map, no
     return added_leaf
 
 
-def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path):
+def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path, device):
     # load meta
     with obj_dir.joinpath('meta.json').open('r') as f:
         meta = json.load(f)
@@ -100,9 +98,17 @@ def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path):
     return mesh, gt_v2
 
 
-def get_images_best_view(mesh: Mesh, image_size=1024, num_views=100, num_split=10, seed=0, fovy=60, more_ratio=10):
+def get_images_best_view(glctx,
+                         mesh: Mesh,
+                         image_size=1024,
+                         num_views=100,
+                         num_split=10,
+                         seed=0,
+                         fovy=60,
+                         more_ratio=10):
     if seed > 0:
         torch.manual_seed(seed)
+    device = mesh.v_pos.device
     fovy = math.radians(fovy)
     max_views = int(num_views * more_ratio)
     radius = torch.rand((max_views,), device=device) * 0.1 + 2.5
@@ -128,9 +134,10 @@ def get_images_best_view(mesh: Mesh, image_size=1024, num_views=100, num_split=1
     return images.cpu(), tri_ids.cpu(), Tw2vs.cpu()
 
 
-def get_images(mesh: Mesh, image_size=256, num_views=1, num_split=10, seed=0, fovy=60):
+def get_images(glctx, mesh: Mesh, image_size=256, num_views=1, num_split=10, seed=0, fovy=60):
     if seed > 0:
         torch.manual_seed(seed)
+    device = mesh.v_pos.device
     fovy = math.radians(fovy)
     # Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=device)
     radius = torch.rand((num_views,), device=device) * 0.1 + 2.5
@@ -155,8 +162,9 @@ def get_images(mesh: Mesh, image_size=256, num_views=1, num_split=10, seed=0, fo
     return images.cpu(), tri_ids.cpu(), Tw2vs.cpu()
 
 
-def load_images(mesh: Mesh, image_dir: Path, num_views=1, fovy=60):
-    Tw2vs = torch.load(image_dir.joinpath("Tw2v.pth"), map_location='cpu')[:num_views]
+def load_images(glctx, mesh: Mesh, image_dir: Path, num_views=1, fovy=60):
+    device = mesh.v_pos.device
+    Tw2vs = torch.load(image_dir.joinpath("Tw2v.pth"), map_location=device)[:num_views]
     images = []
     for i in range(num_views):
         # if colored:
@@ -166,12 +174,12 @@ def load_images(mesh: Mesh, image_dir: Path, num_views=1, fovy=60):
         image = torch.from_numpy(image.copy()).float() / 255.
         images.append(image)
     images = torch.stack(images)  #NxHxWx3
-    image_size = images.shape[2]
-    Tv2c = ops_3d.perspective(fovy=math.radians(fovy), size=(image_size, image_size), device=device)
+    image_size = (images.shape[2], images.shape[1])  # W, H
+    Tv2c = ops_3d.perspective(fovy=math.radians(fovy), size=image_size, device=device)
     Tw2c = Tv2c @ Tw2vs.to(device)
     v_pos = ops_3d.xfm(mesh.v_pos, Tw2c)
-    rast, _ = dr.rasterize(glctx, v_pos, mesh.f_pos.int(), (image_size, image_size))
-    return images, rast[..., -1].int(), Tw2vs
+    rast, _ = dr.rasterize(glctx, v_pos.to(device), mesh.f_pos.int().to(device), image_size)
+    return images, rast[..., -1].int().to(device), Tw2vs
 
 
 def run_2d_segmentation(cache_dir: Path, images: Tensor, tri_ids: Tensor, Tw2vs: Tensor):
@@ -180,7 +188,7 @@ def run_2d_segmentation(cache_dir: Path, images: Tensor, tri_ids: Tensor, Tw2vs:
         if cache_dir.joinpath(f"view_{index:04d}.data").exists():
             continue
         torch.cuda.empty_cache()
-        tree_data = run_predictor((images[index, :, :, :3].cpu().numpy() * 255).astype(np.uint8), device=device)
+        tree_data = run_predictor((images[index, :, :, :3].cpu().numpy() * 255).astype(np.uint8), device=images.device)
         data = {
             'tree_data': tree_data.save(filename=None),
             'tri_id': tri_ids[index].clone(),
@@ -195,7 +203,7 @@ def run_2d_segmentation(cache_dir: Path, images: Tensor, tri_ids: Tensor, Tw2vs:
 
 def build_view_graph(area, tri_ids: Tensor, threshold=0.5, num_nearest=5):
     N_view = tri_ids.shape[0]
-    view_masks = torch.zeros((N_view, area.shape[0] + 1), device=device)
+    view_masks = torch.zeros((N_view, area.shape[0] + 1), device=tri_ids.device)
     for i in range(N_view):
         v_faces = tri_ids[i].unique()
         if v_faces[0] == 0:
@@ -223,6 +231,7 @@ def run_fast_2d_semgentation(
     steps=10,
     predictor: TreePredictor = None,
 ):
+    device = mesh.v_pos.device
     if predictor is None:
         predictor = get_predictor()
     v3 = mesh.v_pos[mesh.f_pos]  # shape: (F, 3, 3)
@@ -296,14 +305,17 @@ def run_fast_2d_semgentation(
 
 
 @torch.no_grad()
-def eval_one(args,
-             shape_root: Path,
-             cache_root: Path,
-             metric: TreeSegmentMetric,
-             num_views=100,
-             epochs_ea=3000,
-             epochs_run=5000,
-             print=print):
+def eval_one(
+    args,
+    glctx: dr.RasterizeCudaContext,
+    device,
+    shape_root: Path,
+    cache_root: Path,
+    num_views=100,
+    epochs_ea=3000,
+    epochs_run=5000,
+    print=print,
+):
     print(f"Shape Dir", shape_root)
     cache_dir = cache_root.joinpath(f"{shape_root.name}")
     cache_dir.mkdir(exist_ok=True)
@@ -316,7 +328,7 @@ def eval_one(args,
         gt = Tree3Dv2(mesh, device=device)
         gt.load(cache_dir.joinpath('gt.tree3dv2'))
     else:
-        mesh, gt = get_mesh_and_gt_tree(shape_root, cache_dir)
+        mesh, gt = get_mesh_and_gt_tree(shape_root, cache_dir, device)
     gt = gt.to('cpu')
     # if len(gt.masks) == 0 or len(gt.masks) >= 200:
     #     return
@@ -327,9 +339,10 @@ def eval_one(args,
     if args.force_view or args.gt_2d or run_2d:
         if args.force_view or len(list(image_dir.glob('*.png'))) < num_views:
             if args.random_views:
-                images, tri_ids, Tw2vs = get_images(mesh, image_size=args.image_size, num_views=num_views)
+                images, tri_ids, Tw2vs = get_images(glctx, mesh, image_size=args.image_size, num_views=num_views)
             else:
-                images, tri_ids, Tw2vs = get_images_best_view(mesh, image_size=args.image_size, num_views=num_views)
+                images, tri_ids, Tw2vs = get_images_best_view(
+                    glctx, mesh, image_size=args.image_size, num_views=num_views)
             torch.save(Tw2vs, image_dir.joinpath('Tw2v.pth'))
             filename_fmt = '{:0%dd}.png' % len(str(num_views))
             for i in range(num_views):
@@ -337,7 +350,7 @@ def eval_one(args,
             print('Save all images in:', image_dir)
             run_2d = True
         else:
-            images, tri_ids, Tw2vs = load_images(mesh, image_dir, num_views=num_views)
+            images, tri_ids, Tw2vs = load_images(glctx, mesh, image_dir, num_views=num_views)
         print('[Image] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
         if run_2d:
             run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
@@ -358,11 +371,11 @@ def eval_one(args,
         tree3d.load(save_path)
     else:
         if args.gt_2d:
-            if not tree3d.build_gt_segmentation(gt.to(device), tri_ids.cuda()):
+            if not tree3d.load_2d_results(gt=gt.to(device), tri_ids=tri_ids.to(device)):
                 return
             gt.to(torch.device('cpu'))
         else:
-            tree3d.load_2d_results(cache_dir)
+            tree3d.load_2d_results(save_root=cache_dir)
         # Gv = tree3d.build_view_graph()
         # Gm = tree3d.build_graph(Gv)
         A = tree3d.build_all_graph()
@@ -380,11 +393,12 @@ def eval_one(args,
         else:
             gnn_m = {
                 'GCN': pyg_nn.GCN,
+                'GCN2': pyg_nn.GCN2Conv,
+                'GAT': pyg_nn.GAT,
                 'CHEB': pyg_nn.ChebConv,
                 'GRAPH': pyg_nn.GraphConv,
                 'LG': pyg_nn.LGConv,
                 'FA': pyg_nn.FAConv,
-                'GCN2': pyg_nn.GCN2Conv,
                 'LE': pyg_nn.LEConv,
                 'SSG': pyg_nn.SSGConv,
                 'SG': pyg_nn.SGConv,
@@ -395,7 +409,7 @@ def eval_one(args,
                 num_layers=args.gnn_layers,
                 out_channels=K,
                 norm='BatchNorm',
-            ).cuda()
+            ).to(device)
         # print(gnn)
         tree3d.run(
             epochs=epochs_run,
@@ -409,8 +423,57 @@ def eval_one(args,
         tree3d.save(save_path)
         print(f"save tree3d results to {save_path}")
         del A, X
+
+    metric = TreeSegmentMetric()
     metric.update(tree3d, gt.to(device))
-    return
+    return metric.pack()
+
+
+def run_many(
+    args,
+    shapes,
+    data_root: Path,
+    cache_root: Path,
+    gpu_id=0,
+    que: mp.Queue = None,
+    metric: TreeSegmentMetric = None,
+):
+    global console
+    if console is None:
+        console = Console()
+    device = torch.device(f"cuda:{gpu_id}")
+    glctx = dr.RasterizeCudaContext(f"cuda:{gpu_id}")
+    torch.cuda.set_device(device)
+    get_predictor(args, print=console.print, device=device)
+    console.print(f'Use GPU {gpu_id}')
+    for shape in tqdm(shapes, desc='Tree3D', disable=que is not None):
+        try:
+            results = eval_one(
+                args,
+                glctx=glctx,
+                device=device,
+                shape_root=data_root.joinpath(shape),
+                cache_root=cache_root,
+                num_views=args.num_views,
+                epochs_ea=args.ae_epochs,
+                epochs_run=args.epochs,
+                print=console.print,
+            )
+            if que is not None:
+                que.put(results)
+            if metric is not None:
+                metric.add_pack(results)
+
+        except Exception as e:
+            console.print_exception()
+            console.print(f"[red] ERROR: {str(e)}")
+            console.print(f"[red] Error shape: {shape}")
+            torch.cuda.empty_cache()
+            if que is not None:
+                que.put(None)
+            # exit(1)
+        if metric is not None:
+            console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
 
 
 def load_instance_segmentaion_gt_for_point_clouds(data_root: Path):
@@ -441,7 +504,8 @@ console = None
 
 def options():
     parser = argparse.ArgumentParser('3D Tree Segmentation for PartNet')
-    parser.add_argument('-o', '--output', default='/data5/wan/PartNet', help='The directory to cache tree3d results')
+    parser.add_argument(
+        '-o', '--output', default='./results/cache/PartNet', help='The directory to cache tree3d results')
     parser.add_argument('--data-root', default='~/data/PartNet/data_v0', help="The root path of PartNet dataset")
     parser.add_argument('-s', '--split', default='', help='The split to test')
     parser.add_argument('-v', '--num-views', default=100, type=int, help='The number of rendered views')
@@ -450,6 +514,7 @@ def options():
     parser.add_argument('--seed', default=42, type=int, help='The seed to random choose evaluation shapes')
     # parser.add_argument('--print-interval', default=10, type=int, help='Print results every steps')
     parser.add_argument('--log', default='log', help='The filename for log file')
+    parser.add_argument('--gpus', default='', help="The ids of used GPUS")
     ## Tree3D options
     parser.add_argument('-n', '--epochs', default=5000, type=int, help='The number of epochs when run tree3d')
     parser.add_argument('-ae', '--ae-epochs', default=3000, type=int, help='The number of epochs when run autoencoder')
@@ -476,6 +541,7 @@ def options():
 def main():
     global console
     args = options()
+    args.gpus = list(map(int, args.gpus.split(','))) if args.gpus else []
 
     torch.manual_seed(args.seed)
     torch.cuda.manual_seed_all(args.seed)
@@ -501,33 +567,33 @@ def main():
     shapes = shapes[args.start_index:]
     if args.num_shapes > 0:
         shapes = shapes[:args.num_shapes]
-    get_predictor(args, print=console.print)
 
     metric = TreeSegmentMetric()
-    for shape in tqdm(shapes, desc='Tree3D'):
-        try:
-            eval_one(
-                args,
-                data_root.joinpath(shape),
-                cache_root=cache_root,
-                metric=metric,
-                num_views=args.num_views,
-                epochs_ea=args.ae_epochs,
-                epochs_run=args.epochs,
-                print=console.print,
+    if len(args.gpus) == 0:
+        run_many(args, shapes, data_root, cache_root, metric=metric)
+    else:
+        ps = []
+        N = len(shapes)
+        M = len(args.gpus)
+        que = mp.Queue()
+        for i, gpu_id in enumerate(args.gpus):
+            p = mp.Process(
+                target=run_many,
+                args=(args, shapes[i * N // M:(i + 1) * N // M], data_root, cache_root),
+                kwargs=dict(que=que, gpu_id=gpu_id),
             )
-        except Exception as e:
-            console.print_exception()
-            console.print(f"[red] ERROR: {str(e)}")
-            console.print(f"[red] Error shape: {shape}")
-            torch.cuda.empty_cache()
-            # exit(1)
+            p.start()
+            ps.append(p)
+        for i in tqdm(range(N), desc='Tree3D'):
+            metric.add_pack(que.get())
+            console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
+        [p.join() for p in ps]
 
-        console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
     if args.log:
         now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
         console.save_text(cache_root.joinpath(f"{args.log}_{now_date}.txt"))
 
 
 if __name__ == '__main__':
+    mp.set_start_method('spawn')
     main()

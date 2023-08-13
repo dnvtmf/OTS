@@ -84,14 +84,20 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [x] [Paper] 完成场景的插图绘制
 
 ### 8.12 work list
-- [ ] [3D] 不同K测试
+- [x] [3D] 不同K测试
 - [ ] [3D] 修改tree loss
-- [ ] [3D] 完成Replica实验
-- [ ] [Paper] 完成方法和实验部分撰写
+- [x] [3D] 完成Replica实验
+- [x] [Paper] 完成方法和实验部分撰写
+
+### 8.13 work list
+- [ ] [Paper] 完成方法部分修改
 - [ ] [3D] PaperNet上测试所有2D结果的准确率
 - [ ] [3D] PaperNet上测试所有gt_seg的准确率
+- [ ] [3D] Replica 选择视角
+- [ ] [3D] PartNet在测试时去除不可见部分
 
 ### future
+- [ ] [3D] Replica 使用高清图片
 - [ ] [2D] 测试automatic mask generator的结果
 - [ ] [2D] metric set ignore nodes
 - [ ] [2D] run experiment on PASCAL VOC/Cityscapes

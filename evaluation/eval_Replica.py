@@ -57,7 +57,7 @@ def get_images_best_view(
 
     fovy = math.radians(fovy)
     Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=device)
-    indices = choose_best_views(glctx, mesh, Tv2c @ Tw2vs, num_views)
+    indices = choose_best_views(glctx, mesh, Tv2c @ Tw2vs, num_views, steps=num_views * 1000, image_size=image_size)
     assert len(indices) == num_views
     print(utils.show_shape(indices))
     Tw2vs = Tw2vs[indices]

@@ -22,19 +22,39 @@ class TreeSegmentMetric:
         self.RQ_sum = 0  # recognition quality
         self.TQ_sum = 0  # tree quality
         self.TS_sum = 0  # tree structure quality
-        self.mPQ_sum = 0  # panoptic quality
-        self.mSQ_sum = 0  # segmentation quality
-        self.mRQ_sum = 0  # recognition quality
-        self.mTQ_sum = 0  # tree quality
-        self.mTS_sum = 0  # tree structure quality
+        # self.mPQ_sum = 0  # panoptic quality
+        # self.mSQ_sum = 0  # segmentation quality
+        # self.mRQ_sum = 0  # recognition quality
+        # self.mTQ_sum = 0  # tree quality
+        # self.mTS_sum = 0  # tree structure quality
         self.maxIoU_sum = 0  # for each gt, choose the best IoU in prediction
         self.is_resize_2d_as_gt = is_resize_2d_as_gt
+
+    def pack(self):
+        return {
+            'cnt': self.cnt,
+            'PQ_sum': self.PQ_sum,
+            'SQ_sum': self.SQ_sum,
+            'RQ_sum': self.RQ_sum,
+            'TQ_sum': self.TQ_sum,
+            'TS_sum': self.TS_sum,
+            'maxIoU_sum': self.maxIoU_sum,
+        }
+
+    def add_pack(self, data: dict):
+        for k, v in data.items():
+            setattr(self, k, getattr(self, k) + v)
 
     @torch.no_grad()
     def update(self,
                prediction: Union[Tree3D, Tree2D, Tree3Dv2],
                gt: Union[Tree3D, Tree2D, Tree3Dv2],
                return_match=False):
+        if gt.cnt == 0:
+            return
+        if prediction.cnt == 0:
+            self.cnt += 1
+            return
         if type(gt).__name__.startswith('Tree3D'):
             IoU, indices_pd, indices_gt = self.calc_IoU_3d(prediction, gt)
         elif type(gt).__name__ == 'Tree2D':  # isinstance(gt, Tree2D):
@@ -45,12 +65,13 @@ class TreeSegmentMetric:
         if M == 0:
             return
         # TS = self.calc_tree_structure_score(prediction, indices_pd)
-        TS = self.calc_tree_structure_score_2(prediction, indices_pd)
+        TS = self.calc_tree_structure_score_2(prediction, indices_pd).item()
         # assert 0 <= TS.min() and TS.max() <= 1. + 1e-4, f"{TS.aminmax()}"
-        if not (0 <= TS.min() and TS.max() <= 1. + 1e-4):
-            print(f"TS not in [0, 1]: {TS.aminmax()}")
+        if not (0 <= TS <= 1. + 1e-4):
+            print(f"TS not in [0, 1]: {TS}")
         # get TQ
         matched_iou, matched = IoU.max(dim=1)
+        self.maxIoU_sum += matched_iou.mean().item()
         # iou_ = torch.zeros_like(IoU)
         # iou_[torch.arange(N, device=iou_.device), matched] = matched_iou * (matched_iou >= self.iou_threshold)
         # iou_ = torch.cummax(iou_, dim=0)[0]
@@ -92,7 +113,6 @@ class TreeSegmentMetric:
         self.TQ_sum += SQ * RQ * TS
 
         self.cnt += 1
-        self.maxIoU_sum += matched_iou.mean().item()
 
         # output match result
         if not return_match:
@@ -144,6 +164,13 @@ class TreeSegmentMetric:
         else:
             masks_gt = gt.masks[indices_gt, 1:]
         masks_gt = masks_gt.float()
+
+        if prediction.face_mask is not None:
+            masks_pd *= prediction.face_mask[1:]
+            masks_gt *= prediction.face_mask[1:]
+        if gt.face_mask is not None:
+            masks_pd *= gt.face_mask[1:]
+            masks_gt *= gt.face_mask[1:]
 
         # calc IoU matrix
         area_pd = torch.mv(masks_pd, gt.area)
@@ -286,17 +313,18 @@ class TreeSegmentMetric:
     def calc_tree_structure_score_2(self, p: Union[Tree2D, Tree3D, Tree3Dv2], indices: Tensor = None):
         if indices is None:
             indices = torch.cat(p.get_levels(), dim=0)[1:] - 1  # do not care root
-            order = torch.argsort(p.scores[indices], descending=True)  # sorted by score
-            indices = indices[order]
+            # order = torch.argsort(p.scores[indices], descending=True)  # sorted by score
+            # indices = indices[order]
+        assert 0 <= indices.min() and indices.max() < len(p.masks)
 
         score = 0
         for i in indices:
-            mask = p.masks[i - 1]
-            if p.parent[i] == 0:
+            mask = p.masks[i]
+            if p.parent[i + 1] == 0:
                 conflict = torch.zeros_like(mask)
             else:
-                conflict = torch.logical_and(mask, torch.logical_not(p.masks[p.parent[i] - 1]))
-            for c in p.get_children(i):
+                conflict = torch.logical_and(mask, torch.logical_not(p.masks[p.parent[i + 1] - 1]))
+            for c in p.get_children(i + 1):
                 conflict = torch.logical_or(conflict, torch.logical_and(mask, p.masks[c - 1]))
             if hasattr(p, 'area'):
                 score += (conflict[1:] * p.area).sum() / (mask[1:] * p.area).sum().clamp_min(self.eps)

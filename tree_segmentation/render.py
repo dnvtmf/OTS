@@ -87,6 +87,7 @@ def choose_best_views(
     mesh: Mesh,
     Tw2c: Tensor,
     N=100,
+    steps=-1,
     image_size=1024,
     num_split=10,
 ):
@@ -113,7 +114,9 @@ def choose_best_views(
     best_choosed = choosed.copy()
     # choose best
     best_score = score
-    for i in range(M * 10):
+    if steps < 0:
+        steps = M * 10
+    for i in range(steps):
         # if i % 100 == 0:
         #     print(f'step: {i}, score: {score.item():.4f}, best: {best_score.item():.4f}')
         x = np.random.choice(choosed, 1)[0]

@@ -52,7 +52,7 @@ def predictor_options(parser: argparse.ArgumentParser):
     return group
 
 
-def get_predictor(args=None, print=print):
+def get_predictor(args=None, print=print, device=torch.device('cuda')):
     global predictor
     if predictor is not None:
         return predictor
@@ -86,7 +86,7 @@ def get_predictor(args=None, print=print):
         print('Loaded Model Semantic-SAM-l')
         # save_root.joinpath('Semantic-SAM-t')
     model.eval()
-    model = model.cuda()
+    model = model.to(device)
 
     predictor = TreePredictor(
         model=model,

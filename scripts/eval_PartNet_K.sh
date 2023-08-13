@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 K=(0.5 1.0 5.0 10.0)
-gpus=(0 1 2 3)
-args=( --force-3d )
+gpus=(0 0 0 0)
+args=(  )
 
 for (( i=0; i < ${#gpus[@]}; ++i ))
 do

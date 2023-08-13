@@ -10,6 +10,7 @@ from torch import nn, Tensor
 import torch.nn.functional as F
 from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
 from torch_scatter import scatter
+import torch_geometric.nn as pyg_nn
 
 from scipy.optimize import linear_sum_assignment
 from tree_segmentation.extension import Mesh, utils
@@ -540,7 +541,7 @@ class Tree3D(TreeStructure):
 
 # noinspection PyAttributeOutsideInit
 class Tree3Dv2(TreeStructure):
-    _save_list = ['masks', 'scores', 'parent', 'last', 'next', 'first', 'cnt', 'A']
+    _save_list = ['masks', 'scores', 'parent', 'last', 'next', 'first', 'cnt', 'face_mask']
 
     def __init__(
         self,
@@ -563,6 +564,7 @@ class Tree3Dv2(TreeStructure):
         self.masks: Tensor = None
         self.masks_area: Tensor = None
         self.scores: Tensor = None
+        self.face_mask = None  # mark unseen faces
         super().__init__(1, device=device, verbose=verbose)
         self.ignore_area = 10
         self.score_threshold = 0.5
@@ -574,6 +576,7 @@ class Tree3Dv2(TreeStructure):
     def reset(self):
         super().reset()
         ## data
+        self.tree2ds = []  # type: List[TreeStructure]
         self.view_infos = []  # type: List[Tuple[Tensor, Tensor]]
         self.range_view = []  # type: List[Tuple[int, int]]
         self.range_level = []  # type: List[Tuple[int, int]]
@@ -650,19 +653,41 @@ class Tree3Dv2(TreeStructure):
             self.insert(self.node_new())
         # self.print_tree()
 
+    @staticmethod
+    def get_face_list(tri_id: Tensor, mask: Tensor = None):
+        faces, cnts = torch.unique(tri_id if mask is None else (mask * tri_id), return_counts=True)
+        if faces[0] == 0:
+            faces, cnts = faces[1:], cnts[1:]
+        faces = faces - 1
+        return faces, cnts
+
     @torch.no_grad()
-    def load_2d_results(self, save_root: Path, N_view=-1, background_threshold=0.5, pack=False):
+    def load_2d_results(
+        self,
+        save_root: Path = None,
+        gt: 'Tree3Dv2' = None,
+        tri_ids: Tensor = None,
+        N_view=-1,
+        background_threshold=0.5,
+        pack=False,
+    ):
         torch.cuda.empty_cache()
+        assert (save_root is None) ^ (gt is None), f"Only can use one of save_root or gt"
         print('[Tree3D] GPU:', utils.get_GPU_memory())
-        seg_2d_files = sorted(list(save_root.glob('*.data')))  # [:50]
-        print(f'[Tree3D] There are {len(seg_2d_files)} data')
-        if N_view > 0:
-            N_view = min(N_view, len(seg_2d_files))
-            print(f"[Tree3D] only load segmentation results of {N_view} view")
-            seg_2d_files = seg_2d_files[:N_view]
-        data = [torch.load(filename, map_location='cpu') for filename in seg_2d_files]  # type: List[dict]
-        # self.data = data
-        print('[Tree3D]', utils.show_shape(data[0]))
+        if save_root is not None:
+            seg_2d_files = sorted(list(save_root.glob('*.data')))  # [:50]
+            print(f'[Tree3D] There are {len(seg_2d_files)} data')
+            if N_view > 0:
+                seg_2d_files = seg_2d_files[:N_view]
+            data = [torch.load(filename, map_location='cpu') for filename in seg_2d_files]  # type: List[dict]
+            print('[Tree3D]', utils.show_shape(data[0]))
+        else:
+            assert tri_ids is not None
+            data = tri_ids
+            if N_view > 0:
+                data = data[:N_view]
+
+        print(f"[Tree3D] Load {len(data)} views")
         print('[Tree3D] GPU:', utils.get_GPU_memory())
 
         self._masks_2d_packed = pack
@@ -673,23 +698,25 @@ class Tree3Dv2(TreeStructure):
         self.range_view = []
         self.range_level = []
         self.view_infos = []
-        self.masks_view = torch.zeros((len(data), self.num_faces + 1), dtype=torch.bool, device=self.device)
+        self.tree2ds = []
+        self.masks_view = torch.zeros((len(data), self.num_faces), dtype=torch.bool, device=self.device)
         self.V = 0
         self.M = 0
         self.Lmax = 0
-        temp = torch.zeros(self.num_faces + 1, dtype=torch.float, device=self.device)
-        mask_2d = torch.zeros(self.num_faces + 1, dtype=torch.int, device=self.device)
-        now_view = 0
+        temp = torch.zeros(self.num_faces, dtype=torch.float, device=self.device)
+        mask_2d = torch.zeros(self.num_faces, dtype=torch.int, device=self.device)
         for vid in range(len(data)):
-            tri_id = data[vid]['tri_id'].to(self.device)
+            if gt is None:
+                tri_id = data[vid]['tri_id'].to(self.device)
 
-            v_faces, v_cnts = tri_id.unique(return_counts=True)
-            if v_faces[0] == 0:
-                v_faces, v_cnts = v_faces[1:], v_cnts[1:]
-            tree2d = Tree2D(device=self.device)
-            tree2d.load(None, **data[vid]['tree_data'])
-            tree2d.remove_background(tri_id.eq(0), background_threshold)
-            # tree2d.compress()
+                tree2d = Tree2D(device=self.device)
+                tree2d.load(None, **data[vid]['tree_data'])
+                tree2d.remove_background(tri_id.eq(0), background_threshold)
+                # tree2d.compress()
+            else:
+                tri_id = data[vid].to(self.device)
+                tree2d = gt.get_2d_tree(tri_id)
+            v_faces, v_cnts = self.get_face_list(tri_id)
 
             masks = tree2d.masks
             # print(f'view: {vid}', utils.get_GPU_memory(), tree2d.cnt, utils.show_shape(masks), tree2d.is_compressed)
@@ -701,27 +728,18 @@ class Tree3Dv2(TreeStructure):
                     continue
                 mask_2d.zero_()
                 for i in nodes:
-                    faces, cnts = torch.unique(tri_id * masks[i - 1], return_counts=True)
+                    faces, cnts = self.get_face_list(tri_id, masks[i - 1])
                     assert 0 <= faces.min() and faces.max() < len(temp), f"view: {vid}, {faces.max()} vs {len(temp)}"
                     temp.zero_()
                     temp[faces.long()] = cnts.float()
-                    # temp2 = torch.zeros_like(temp)
-                    # faces2, cnts2 = torch.unique(tri_id[masks[i - 1]], return_counts=True)
-                    # temp2[faces2] = cnts2.float()
-                    # print((temp2[1:] - temp[1:]).abs().max())
-                    # faces_masks_v.append(temp[v_faces] / v_cnts)
-                    # temp.scatter_reduce_(0,
-                    #                      (tri_id.long() * (masks[i - 1])).view(-1), torch.ones_like(tri_id, dtype=torch.float),
-                    #  'sum')
                     temp[v_faces] /= v_cnts
-                    temp[0] = 0
                     self.M += 1
                     if pack:
                         mask_2d[temp >= 0.5] = self.M  # FIXME: may area = 0
                         indices_2d.append(len(masks_2d))
                     else:
                         masks_2d.append(temp.clone())
-                    indices_view.append(now_view)
+                    indices_view.append(self.V)
                 if pack:
                     self.range_2d.append((self.M - len(nodes), self.M))
                     masks_2d.append(mask_2d.clone())
@@ -731,7 +749,13 @@ class Tree3Dv2(TreeStructure):
             if num_masks_v == 0:
                 print(f"[Tree3D] load 2d results: view {vid} no vaild masks")
                 continue
-            now_view += 1
+            # t = TreeStructure(tree2d.cnt + 1, device=self.device)
+            # t.cnt = tree2d.cnt
+            # t.parent = tree2d.parent.clone()
+            # t.first = tree2d.first.clone()
+            # t.next = tree2d.next.clone()
+            # t.last = tree2d.last.clone()
+            self.tree2ds.append(self._get_node_relationship(tree2d))
             self.view_infos.append((v_faces, v_cnts))
             self.masks_view[self.V, v_faces] = 1  # cnts.float()
             self.range_view.append((num_masks_start, self.M))
@@ -740,6 +764,8 @@ class Tree3Dv2(TreeStructure):
             # indices_view.extend([self.V] * num_masks_v)
             self.V += 1
             self.Lmax = max(self.Lmax, num_masks_v)
+        if self.V == 0:
+            return False
         if pack:
             self.indices_2d = torch.tensor(indices_2d, dtype=torch.int32, device=self.device)
         else:
@@ -759,6 +785,7 @@ class Tree3Dv2(TreeStructure):
             )
         else:
             self._masks_2d_sp = None
+        self.face_mask = F.pad(self.masks_view.any(0), (1, 0))
 
         print(f'[Tree3D] view_masks, view_infos[0]: {utils.show_shape(self.masks_view, self.view_infos[0])}')
         print(f"[Tree3D] loaded {self.V} views, {self.M} masks, max_num: {self.Lmax}")
@@ -768,10 +795,31 @@ class Tree3Dv2(TreeStructure):
         # print(seen_faces.shape)
         # self.area
         print('[Tree3D] GPU:', utils.get_GPU_memory())
-        return
+        return True
+
+    def _get_node_relationship(self, t: TreeStructure):
+        M = t.cnt
+        v_p = torch.zeros((M, M), dtype=torch.bool, device=self.device)  # all parents
+        v_c = torch.zeros((M, M), dtype=torch.bool, device=self.device)  # all sub-tree nodes
+
+        def _query(p=0):
+            for c in t.get_children(p):
+                if p != 0:
+                    v_p[c - 1] |= v_p[p - 1]
+                    v_p[c - 1, p - 1] = True
+                _query(c)
+                if p != 0:
+                    v_c[p - 1] |= v_c[c - 1]
+            if p != 0:
+                v_c[p - 1, p - 1] = True
+                v_c[p - 1] |= v_p[p - 1]
+
+        _query()
+        v_c = torch.logical_not(v_c)  # all not intersect nodes
+        return torch.stack([v_p, v_c])
 
     @torch.no_grad()
-    def build_gt_segmentation(self, gt_tree: 'Tree3Dv2', tri_ids: Tensor, ignore_pixels=100):
+    def _build_gt_segmentation(self, gt_tree: 'Tree3Dv2', tri_ids: Tensor, ignore_pixels=100):
         """build gt 2D segmenation results using ground truth tree"""
         self._masks_2d_packed = False
         self.V = tri_ids.shape[0]
@@ -781,27 +829,24 @@ class Tree3Dv2(TreeStructure):
         num_masks = []
         self.range_view = []
         self.view_infos = []
-        self.masks_view = torch.zeros((self.V, gt_tree.num_faces + 1), dtype=torch.bool, device=self.device)
-        temp = torch.zeros(gt_tree.num_faces + 1, device=self.device)
+        self.masks_view = torch.zeros((self.V, gt_tree.num_faces), dtype=torch.bool, device=self.device)
+        temp = torch.zeros(gt_tree.num_faces, device=self.device)
 
         now_view = 0
         for vid in range(self.V):
             tri_id = tri_ids[vid].to(self.device)
-            v_faces, v_cnts = tri_id.unique(return_counts=True)
-            if v_faces[0] == 0:
-                v_faces, v_cnts = v_faces[1:], v_cnts[1:]
+            v_faces, v_cnts = self.get_face_list(tri_id)
             masks_2d = []
             for i in range(gt_tree.cnt):
                 mask = gt_tree.masks[i, tri_id]
                 if mask.sum().item() <= ignore_pixels:  # ignore the mask which the number of pixels less than threshold
                     continue
-                faces, cnts = torch.unique(tri_id[mask], return_counts=True)
+                faces, cnts = self.get_face_list(tri_id, mask)
                 masks_2d.append(mask)
                 temp.zero_()
                 temp[faces.long()] = cnts.float()
                 # faces_masks_v.append(temp[v_faces] / v_cnts)
                 temp[v_faces] /= v_cnts
-                temp[0] = 0
                 face_masks.append(temp.clone())
             num_masks_vid = len(masks_2d)
             if num_masks_vid == 0:
@@ -822,6 +867,7 @@ class Tree3Dv2(TreeStructure):
         # print(tree3d_gt.view_range, utils.show_shape(tree3d_gt.face_masks))
         self.M = sum(x for x in num_masks)
         self.Lmax = max(x for x in num_masks)
+        self.face_mask = F.pad(self.masks_view.any(0), (1, 0))
         print(f'[Tree3D] view_masks, view_infos[0]: {utils.show_shape(self.masks_view, self.view_infos[0])}')
         print(f"[Tree3D] loaded {self.V} views, {self.M} masks, max_num: {self.Lmax}")
         return True
@@ -832,7 +878,7 @@ class Tree3Dv2(TreeStructure):
         if self._masks_2d_packed:
             self._masks_2d_sp = None
             self.indices_2d = None
-            masks_2d = torch.zeros((self.M, self.num_faces + 1), dtype=torch.float, device=device)
+            masks_2d = torch.zeros((self.M, self.num_faces), dtype=torch.float, device=device)
             # indices = torch.arange(self.num_faces + 1, device=device)
             # for i in range(len(self.masks_2d)):
             #     masks_2d[self.masks_2d[i].to(device), indices] = 1
@@ -849,12 +895,12 @@ class Tree3Dv2(TreeStructure):
         else:
             self._masks_2d_sp = self.masks_2d.to_sparse_coo()
             masks_2d = []
-            self.indices_2d = torch.zeros(self.M, device=self.device)
+            self.indices_2d = torch.zeros(self.M, dtype=torch.int, device=self.device)
             self.range_level = []
             self.range_2d = []
             for v in range(self.V):
                 sl = len(masks_2d)
-                masks_2d.append(torch.zeros(self.num_faces + 1, dtype=torch.int, device=device))
+                masks_2d.append(torch.zeros(self.num_faces, dtype=torch.int, device=device))
                 s, e = self.range_view[v]
                 self.range_2d.append((s, s + 1))
                 for i in range(s, e):
@@ -875,9 +921,9 @@ class Tree3Dv2(TreeStructure):
         if self.verbose > 0:
             print(f"[Tree3D] start build view graph")
         assert self.masks_view is not None
-        area = torch.mv(self.masks_view[:, 1:].float(), self.area)
+        area = torch.mv(self.masks_view.float(), self.area)
         # print(area.shape)
-        A = F.linear(self.masks_view[:, 1:].float(), self.masks_view[:, 1:] * self.area)
+        A = F.linear(self.masks_view.float(), self.masks_view * self.area)
         # A = A / (area[:, None] + area[None, :] - A).clamp_min(1e-7)
         A = A / area[:, None]
         indices = torch.topk(A, num_nearest + 1, dim=0)[1]
@@ -911,7 +957,7 @@ class Tree3Dv2(TreeStructure):
                         A[xi:yi, xj:yj] = 0
                         A[xj:yj, xi:yi] = 0
                         continue
-                    area_now = self.area[view_mask[1:]]
+                    area_now = self.area[view_mask]
                     idx_i = self.masks_2d[i][view_mask].long()
                     idx_j = self.masks_2d[j][view_mask].long()
                     area[xi:yi] = 0
@@ -928,14 +974,14 @@ class Tree3Dv2(TreeStructure):
             A = torch.zeros((self.M, self.M), device=self.device, dtype=torch.float)
             for i in range(self.V):
                 si, ei = self.range_view[i]
-                masks_i = self.masks_2d[si:ei, 1:].to(self.device)
+                masks_i = self.masks_2d[si:ei].to(self.device)
                 for j in range(self.V):
                     if i >= j or not view_graph[i, j]:
                         continue
-                    view_mask = (self.masks_view[i] * self.masks_view[j])[1:].float()
+                    view_mask = (self.masks_view[i] * self.masks_view[j]).float()
                     sj, ej = self.range_view[j]
                     masks_i_ = masks_i * view_mask
-                    masks_j = self.masks_2d[sj:ej, 1:].to(self.device) * view_mask
+                    masks_j = self.masks_2d[sj:ej].to(self.device) * view_mask
                     inter = F.linear(masks_i_, masks_j * self.area)
                     area_i = (masks_i_ * self.area).sum(-1)
                     area_j = (masks_j * self.area).sum(-1)
@@ -951,30 +997,30 @@ class Tree3Dv2(TreeStructure):
         N = self.M + self.V
         A = torch.zeros((N, N), device=self.device)
         # view-view
-        # areas_v = torch.mv(self.masks_view[:, 1:].float(), self.area)[:, None]
-        # A[self.M:, self.M:] = F.linear(self.masks_view[:, 1:].float(), self.masks_view[:, 1:] * self.area) / areas_v
+        # areas_v = torch.mv(self.masks_view.float(), self.area)[:, None]
+        # A[self.M:, self.M:] = F.linear(self.masks_view.float(), self.masks_view * self.area) / areas_v
         A[self.M:, self.M:] = self.build_view_graph(threshold, num_nearest)
         # view-mask
         if self._masks_2d_packed:
             areas_m = torch.zeros((self.M + 1), device=self.device)
             # for i in range(len(self.masks_2d)):
-            #     areas_m.scatter_reduce_(0, self.masks_2d[i, 1:].long(), self.area, 'sum')
+            #     areas_m.scatter_reduce_(0, self.masks_2d[i.long(), self.area, 'sum')
             for i in range(self.M):
                 mask = self.masks_2d[self.indices_2d[i]] == (i + 1)
-                areas_m[i + 1] = torch.sum(mask[1:] * self.area)
+                areas_m[i + 1] = torch.sum(mask * self.area)
             temp = torch.zeros((self.M + 1), device=self.device)
             for i in range(self.V):
                 masks_2d = self.masks_2d * self.masks_view[i]
                 temp.zero_()
                 # for j in range(len(masks_2d)):
-                #     temp.scatter_reduce_(0, masks_2d[j, 1:].long(), self.area, 'sum')
+                #     temp.scatter_reduce_(0, masks_2d[j].long(), self.area, 'sum')
                 for j in range(self.M):
                     mask = masks_2d[self.indices_2d[j]] == (j + 1)
-                    temp[j + 1] = torch.sum(mask[1:] * self.area)
-                A[:M, M + i] = temp[1:] / areas_m[1:].clamp_min(1e-7)
+                    temp[j + 1] = torch.sum(mask * self.area)
+                A[:M, M + i] = temp[1:] / areas_m.clamp_min(1e-7)
         else:
-            areas_m = torch.mv(self.masks_2d[:, 1:], self.area)[:, None].clamp_min(1e-7)
-            A[:M, M:] = F.linear(self.masks_2d[:, 1:], self.masks_view[:, 1:].float() * self.area) / areas_m
+            areas_m = torch.mv(self.masks_2d, self.area)[:, None].clamp_min(1e-7)
+            A[:M, M:] = F.linear(self.masks_2d, self.masks_view.float() * self.area) / areas_m
         # mask-mask
         A[:M, :M] = self.build_graph()
         return A
@@ -1002,12 +1048,12 @@ class Tree3Dv2(TreeStructure):
             indices = torch.randint(0, N, (batch_size,), device=self.device)
             indicesM = indices[indices < self.M] if include_views else indices
             if self._masks_2d_packed:
-                masks_gt = (self.masks_2d[self.indices_2d[indicesM], 1:]).eq(indicesM[:, None] + 1)
+                masks_gt = (self.masks_2d[self.indices_2d[indicesM]]).eq(indicesM[:, None] + 1)
             else:
-                masks_gt = self.masks_2d[indicesM, 1:].to(self.device)
+                masks_gt = self.masks_2d[indicesM].to(self.device)
             if include_views and len(indices) != len(indicesM):
                 indicesV = indices[indices >= self.M] - self.M
-                masks_gt = torch.cat([masks_gt, self.masks_view[indicesV, 1:].to(masks_gt)], dim=0)
+                masks_gt = torch.cat([masks_gt, self.masks_view[indicesV].to(masks_gt)], dim=0)
             ## TODO: random project to some view
             # print(utils.show_shape(masks_gt))
             with torch.autocast(device_type='cuda', dtype=torch.float16):
@@ -1047,15 +1093,15 @@ class Tree3Dv2(TreeStructure):
         with torch.no_grad():
             for indices in torch.arange(self.M, device=self.device).split(batch_size * 2, dim=0):
                 if self._masks_2d_packed:
-                    masks = (self.masks_2d[self.indices_2d[indices], 1:]).eq(indices[:, None] + 1)
+                    masks = (self.masks_2d[self.indices_2d[indices]]).eq(indices[:, None] + 1)
                 else:
-                    masks = self.masks_2d[indices, 1:]
+                    masks = self.masks_2d[indices]
                 with torch.autocast(device_type='cuda', dtype=torch.float16):
                     X.append(autoencoder(masks.half(), only_encoder=True))
             if include_views:
                 for indices in torch.arange(self.V, device=self.device).split(batch_size * 2, dim=0):
                     with torch.autocast(device_type='cuda', dtype=torch.float16):
-                        X.append(autoencoder(self.masks_view[indices, 1:].half(), only_encoder=True))
+                        X.append(autoencoder(self.masks_view[indices].half(), only_encoder=True))
         X = torch.cat(X, dim=0)
         print('[Tree3D] Features of face masks:', utils.show_shape(X))
         # self.X = X
@@ -1066,11 +1112,11 @@ class Tree3Dv2(TreeStructure):
         mask = self.masks_view[self.indices_view]
         if Masks is None:
             Masks = (P.T @ self.masks_2d) / (P.T @ mask).clamp_min(eps)  # shape: [C, num_faces]
-        inter = F.linear(Masks[:, 1:], self.masks_2d[:, 1:] * self.area)  # shape: [C, N], do not need *mask
+        inter = F.linear(Masks, self.masks_2d * self.area)  # shape: [C, N], do not need *mask
         # now_area = (Masks[:32, None, 1:] * mask[None, :64, 1:] * mesh_area).sum(dim=-1)
-        now_area = F.linear(Masks[:, 1:], mask[:, 1:] * self.area)
+        now_area = F.linear(Masks, mask * self.area)
         # print(inter.shape, now_area.shape, now_area_2.shape, (now_area_2 - now_area).abs().max())
-        mask_areas = (self.masks_2d[:, 1:] * self.area).sum(dim=-1)
+        mask_areas = (self.masks_2d * self.area).sum(dim=-1)
 
         dice_loss = 2. * inter / (now_area + mask_areas[None, :]).clamp_min(eps)
         return dice_loss
@@ -1094,10 +1140,10 @@ class Tree3Dv2(TreeStructure):
         c_masks = c_masks / t.clamp_min(1e-7)  # shape: [C, nF]
         c_masks = c_masks[c_idx]  # shape: [N, nF]
 
-        inter = (c_masks[:, 1:] * self.masks_2d[:, 1:] * self.area).sum(dim=-1)  # shape: [N], do not need *mask
+        inter = (c_masks * self.masks_2d * self.area).sum(dim=-1)  # shape: [N], do not need *mask
         # now_area = (Masks[:32, None, 1:] * mask[None, :64, 1:] * mesh_area).sum(dim=-1)
-        now_area = (c_masks[:, 1:][:, 1:] * self.masks_view[self.indices_view, 1:] * self.area).sum(dim=-1)
-        mask_areas = (self.masks_2d[:, 1:] * self.area).sum(dim=-1)
+        now_area = (c_masks[:, 1:] * self.masks_view[self.indices_view] * self.area).sum(dim=-1)
+        mask_areas = (self.masks_2d * self.area).sum(dim=-1)
         dice_loss = 2. * inter / (now_area + mask_areas[None, :]).clamp_min(eps)  # shape: [C, N]
         return
 
@@ -1114,19 +1160,20 @@ class Tree3Dv2(TreeStructure):
     #     masked_feats = feats[:, None] * view_feats[self.view_indices][None, :]
     #     return 1 - F.cosine_similarity(masked_feats, mask_feats[None, :], dim=-1).mean()
 
-    def loss_reg_edge_in_same_view(self, P: Tensor):
+    def loss_reg_edge_in_same_view(self, P: Tensor, scores: Tensor):
         """
         Two 2D masks in same view should not map to same 3D mask.
 
         Args:
             P: shape [K, M]
+            scores: shape [K,]
 
         Returns: Tensor
         """
         mask = (self.indices_view[:, None] == self.indices_view[None, :]) ^ torch.eye(self.M, device=self.device).bool()
         same_view_edges = mask.nonzero(as_tuple=True)
-        P_uv = (P[same_view_edges[0], :] * P[same_view_edges[1], :]).sum(dim=1)
-        return P_uv.mean()
+        P_uv = (P[:, same_view_edges[0]] * P[:, same_view_edges[1]]) * scores[:, None]  # shape [K, E]
+        return P_uv.sum(dim=0).mean()
 
     def loss_masks_relation(self, P: Tensor, A: Tensor):
         """ All 2D masks belonging to the same 3D masks should be connected to each other or cannot see each other
@@ -1162,7 +1209,7 @@ class Tree3Dv2(TreeStructure):
 
         Args:
             P: shape [K, M]
-            masks: shape [K, F+1]
+            masks: shape [K, F]
             scores: shape [K]
             A: shape [M+V, M+V]
 
@@ -1177,18 +1224,18 @@ class Tree3Dv2(TreeStructure):
         view_mask[0] = 0
         if view_mask.sum() == 0:  # no intersection
             return torch.zeros(1, device=self.device)
-        masks_ = masks[:, view_mask] * self.area[view_mask[1:]]
-        inter_ = F.linear(masks_, masks_)
-        area = masks_.sum(dim=-1)
-        IoU = inter_ / (area[:, None] + area[None, :] - inter_).clamp_min(eps)  # tree结点 两两间IoU
-        # IoU = 2 * inter_ / (area[:, None] + area[None, :]).clamp_min(eps)  # tree结点 两两间IoU
-        IoU = IoU * scores[:, None] * scores[None, :]
+        masks_v = masks[:, view_mask]
+        area_v = self.area[view_mask]
+        inter = F.linear(masks_v, masks_v * area_v)
+        area = torch.mv(masks_v, area_v)
+        IoU = inter / (area[:, None] + area[None, :] - inter).clamp_min(eps)  # tree结点 两两间IoU
+        # IoU = 2 * inter_ / (area[:, None] + area[None, :]).clamp_min(eps)  # tree结点 两两间dice score
+        IoU = IoU * scores[:, None] * scores[None, :]  # [K, K]
 
         id_1 = torch.nonzero(self.indices_view.eq(k1))[:, 0]
         id_2 = torch.nonzero(self.indices_view.eq(k2))[:, 0]
         predictions = (P[:, id_1].T @ IoU @ P[:, id_2])
         IoU_gt = A[torch.meshgrid(id_1, id_2, indexing='ij')]
-
         return F.mse_loss(predictions, IoU_gt)
 
     def loss_view_mask(self, match_scores: Tensor, scores: Tensor):
@@ -1216,12 +1263,13 @@ class Tree3Dv2(TreeStructure):
         # gt = torch.zeros_like(scores, requires_grad=False)
         # gt[idx3d] = 1
         # 最大匹配
-        predicton = match_scores.amax(dim=1)
-        indices = match_scores.argmax(dim=0)
+        predicton = match_scores.amax(dim=1)  # [K]
+        indices = match_scores.argmax(dim=0)  # [Mv]
         gt = torch.zeros_like(predicton, requires_grad=False)
         assert 0 <= indices.min() and indices.max() < len(scores)
         gt[indices] = 1
-        return F.mse_loss(predicton * scores, gt)
+        # return F.mse_loss(predicton * scores, gt)
+        return (gt - predicton * scores).mean()
 
     def loss_mask_all_view(self, masks: Tensor):
         """ For a 3D mask, all view have a 2D match or empty
@@ -1230,35 +1278,115 @@ class Tree3Dv2(TreeStructure):
             masks: shape [K, F+1]
         """
 
-    def loss_fn(self, S: Tensor, nodes_logits: Tensor, eps=1e-7):
-        P = S.softmax(dim=1)  # shape: (N, C)
-        Masks = (P.T @ self.masks_2d) / (P.T @ self.masks_view[self.indices_view]).clamp_min(eps)  # [C, nF]
-        match_score = self.calc_asssign_score(P, Masks, eps)
-        node_scores = nodes_logits.sigmoid()
-        losses = {
-            'cm': self.loss_comm(P, scores=match_score, Masks=Masks, eps=eps),
-            # 'edge': self.edge_similarity(S),
-            # 'view': self.loss_reg_edge_in_same_view(P),
-            # 'recon': self.recon_loss(P, Masks)
-            # 'l1': self.calc_comm_prob(P).abs().mean(),
-            'cc': self.community_confidence(match_score, node_scores),
-        }
-        return losses
+    def loss_2d_tree(self, P: Tensor, masks: Tensor, scores: Tensor, view=-1, eps=1e-7):
+        """ The viewed masks like the 2D tree"""
+        if view < 0:
+            view = torch.randint(0, self.V, (1,)).item()
+        masks = masks[:, self.masks_view[view]]  # [K, Fv]
+        R = self.tree2ds[view]  # [2, Mv, Mv ] relationship
+        s, e = self.range_view[view]
+        P = P[:, s:e] * scores[:, None]  # [K, Mv]
+        # with torch.no_grad():
+        #     seen = (masks >= 0.5).any(dim=1)  # [K]
+        # P = P[seen]
+        # masks = masks[seen]
+        # if masks.numel() == 0:
+        #     return torch.zeros(1, device=self.device)
+
+        f_area = self.area[self.masks_view[view]]  # [Fv]
+        areas = torch.mv(masks, f_area)  # [K]
+        inter = F.linear(masks, masks * f_area)
+        In = inter / areas[:, None].clamp_min(eps)  # [K, K]
+        IoU = inter / (areas[:, None] + areas[None, :] - inter).clamp_min(eps)  # [K, K]
+        notIn = (P.T @ (1 - In) @ P) * R[0]  # [Mv, Mv]
+        IoU = (P.T @ IoU @ P) * R[1]  # [Mv, Mv]
+        loss = (notIn.sum() + IoU.sum()) / R.sum().clamp_min(eps)
+        return loss
+
+    @torch.no_grad()
+    def _build_tree_for_loss(self, masks: Tensor):
+        K = len(masks)
+        areas = torch.mv(masks, self.area)
+
+        def _build_tree(x: int, t: TreeStructure, p=0, threshold=0.5):
+            in_set = []
+            for c in t.get_children(p):
+                mask_c = masks[c - 1]
+                inter = torch.sum(masks[x] * mask_c * self.area)
+                in_i = inter / areas[x]
+                in_c = inter / areas[c]
+                if max(in_i, in_c) >= threshold:
+                    if in_i > in_c:  # x in c
+                        _build_tree(x, t, c, threshold)
+                        return
+                    else:  # c in x
+                        in_set.append(c)
+            t.node_insert(x + 1, p)
+            for c in in_set:
+                t.node_move(c, x + 1)
+            return
+
+        tree = TreeStructure(K + 1, device=self.device)
+        for i in range(K):
+            _build_tree(i, tree)
+        return tree
+
+    def loss_tree_2(self, masks: Tensor, scores: Tensor, eps=1e-7):
+        t = self._build_tree_for_loss(masks)
+        R = self._get_node_relationship(t)
+
+        ## check
+        def is_parent(x, y):
+            x, y = x + 1, y + 1
+            if x == y:
+                return False
+            while x != 0:
+                if x == y:
+                    return True
+                x = t.parent[x].item()
+            return False
+
+        # for i in range(K):
+        #     for j in range(K):
+        #         if i == j:
+        #             assert not R[0,i, j] and not v_c[i, j]
+        #         else:
+        #             assert R[0, i, j] == is_parent(i, j), f"{i} {j}, {R[0, i, j]}, {is_parent(i, j)}"
+        #             assert v_c[i, j] != (is_parent(i, j) or is_parent(j, i)), \
+        #             f"{i} {j}, {v_c[i, j]}, {is_parent(i, j)},  {is_parent(j, i)}"
+        ## calc loss
+        conflict = (1 - masks[None, :, :]) * R[0, :, :, None] + masks[None, :, :] * R[1, :, :, None]
+        conflict = conflict * masks[:, None, :] * scores[None, :, None]
+        conflict = conflict.amax(dim=1)
+        ## check
+        # for i in range(K):
+        #     cf_i = torch.zeros_like(masks[i])
+        #     for j in range(K):
+        #         if v_p[i, j]:
+        #             cf_i = torch.maximum(cf_i, (1 - masks[j]) * masks[i] * scores[j])
+        #         if v_c[i, j]:
+        #             cf_i = torch.maximum(cf_i, masks[j] * masks[i] * scores[j])
+        #     assert (conflict[i] - cf_i).abs().max() < 1e-5, f"{(conflict[i]-cf_i).abs().max()}"
+        loss = torch.mv(conflict, self.area) / torch.mv(masks, self.area).clamp_min(eps)
+        loss = (loss * scores).mean()
+        return loss
 
     def loss_tree(self, masks: Tensor, scores: Tensor, eps=1e-7):
         """let masks to be a tree"""
-        areas = masks[:, 1:] @ self.area
-        inter = F.linear(masks[:, 1:], masks[:, 1:] * self.area)
+        areas = masks @ self.area
+        inter = F.linear(masks, masks * self.area)
         IoU = inter / (areas[:, None] + areas[None, :] - inter).clamp_min(eps)
         In = inter / (areas[:, None]).clamp_min(eps)  # In[i, j] = area(union(i, j)) / area_i
         # 互不相交: inter -> 0 / IoU -> 0
         # 一个完全在另外一个内部  # In[i, j] == area[i] or In[i,j] == area[j]
         # 都不是tree的结点 score[i] -> 0 or score[j] -> 0
         # losses = torch.minimum(IoU, torch.minimum((inter - areas[:, None]).abs(), (inter - areas[None, :]).abs()))
-        losses = torch.minimum(IoU, 1 - torch.maximum(In, In.T))
-        weights = scores[:, None] * scores[None, :]
-        weights = weights / weights.sum()
-        return torch.sum(losses * weights)
+        scores = scores / scores.sum()
+        losses = torch.minimum(IoU, 1 - torch.maximum(In, In.T))  # shape: [K, K]
+        return torch.sum(losses * scores[None, :])
+        # weights = scores[:, None] * scores[None, :]
+        # weights = weights / weights.sum()
+        # return torch.sum(losses * weights)
         # return losses.mean() * 0.5
 
     def _get_masks(self, P: Tensor, eps=1e-7):
@@ -1276,17 +1404,18 @@ class Tree3Dv2(TreeStructure):
         return masks  # shape: [K, F+1]
 
     def calc_losses(
-        self,
-        logits: Tensor,
-        node_logits: Tensor,
-        view_index: int,
-        A: Tensor,
-        eps=1e-7,
-        progress=1.0,
-        timer: utils.TimeWatcher = None,
+            self,
+            logits: Tensor,
+            node_logits: Tensor,
+            view_index: int,
+            A: Tensor,
+            eps=1e-7,
+            progress=1.0,
+            timer: utils.TimeWatcher = None,
+            weights=dict(),
     ) -> Dict[str, Tensor]:
         losses = {}  # type: Dict[str, Tensor]
-        if progress == 1.:
+        if progress < 0 or progress == 1.:
             P = logits.softmax(dim=1).T
         else:
             topP, indices = torch.topk(logits, k=max(1, int(logits.size(1) * (1 - progress))), dim=1)
@@ -1294,23 +1423,33 @@ class Tree3Dv2(TreeStructure):
             P = torch.scatter(torch.zeros_like(logits), 1, indices, topP).T
 
         masks = self._get_masks(P)  # [K, F+1]
-        scores = node_logits.sigmoid()  # the probability for where a node in the tree
+        assert not torch.isnan(masks).any()
+        scores = node_logits.float().sigmoid()  # the probability for where a node in the tree
         if timer is not None:
             timer.log('get masks')
 
         # graph similarity
-        # losses['es'] = self.loss_edge_similarity(P, A)
-        # if timer is not None:
-        #     timer.log('edge_sim')
-
-        losses['recon'] = self.loss_recon(P, masks, scores, A, eps=eps)
-        if timer is not None:
-            timer.log('recon')
+        if weights.get('es', 0) > 0:
+            losses['es'] = self.loss_edge_similarity(P, A)
+            if timer is not None:
+                timer.log('edge_sim')
+        if weights.get('t2d', 0) > 0:
+            losses['t2d'] = self.loss_2d_tree(P, masks, scores)
+            if timer is not None:
+                timer.log('t2d')
+        if weights.get('edge', 0) > 0:
+            losses['edge'] = self.loss_reg_edge_in_same_view(P, scores)
+            if timer is not None:
+                timer.log('edge')
+        if weights.get('recon', 1) > 0:
+            losses['recon'] = self.loss_recon(P, masks, scores, A, eps=eps)
+            if timer is not None:
+                timer.log('recon')
         # 评估Masks投影到当前view后的masks与当前view检测出的结果之间的差别
         s, e = self.range_view[view_index]
-        P = P[:, s:e]
-        view_mask = self.masks_view[view_index, 1:]  # 当前view的可见部分
-        area_3d = torch.mv(masks[:, 1:], view_mask * self.area)  # shape: [K]
+        P = P[:, s:e] * scores[:, None]
+        view_mask = self.masks_view[view_index]  # 当前view的可见部分
+        area_3d = torch.mv(masks, view_mask * self.area)  # shape: [K]
         if self._masks_2d_packed:
             # sm, em = self.range_level[view_index]
             # area_2d = torch.zeros(e - s + 1, device=self.device)
@@ -1318,24 +1457,25 @@ class Tree3Dv2(TreeStructure):
             # area = self.area * view_maskimer is not None:
 
             # for x in range(sm, em):
-            #     mask_2d = (self.masks_2d[x, 1:] - s).clamp(0).long()
+            #     mask_2d = (self.masks_2d[x] - s).clamp(0).long()
             #     area_2d.scatter_reduce_(0, mask_2d, area, 'sum')
-            #     # print(utils.show_shape(mask_2d[None, :].repeat(P.shape[0], 1), area * masks[:, 1:]))
-            #     inter = torch.scatter_reduce(inter, 1, mask_2d.repeat(P.shape[0], 1), area * masks[:, 1:], 'sum')
-            # match_score = 2. * match_score[:, 1:] / (area_3d[:, None] + area_2d[None, 1:]).clamp_min(eps)
+            #     # print(utils.show_shape(mask_2d[None, :].repeat(P.shape[0], 1), area * masks))
+            #     inter = torch.scatter_reduce(inter, 1, mask_2d.repeat(P.shape[0], 1), area * masks, 'sum')
+            # match_score = 2. * match_score / (area_3d[:, None] + area_2d[None]).clamp_min(eps)
             with torch.no_grad():
                 masks_2d = []
                 for i in range(s, e):
                     assert 0 <= self.indices_2d[i] and self.indices_2d[i] < len(self.masks_2d)
                     masks_2d.append(self.masks_2d[self.indices_2d[i]] == (i + 1))
-                masks_2d = torch.stack(masks_2d, dim=0)[:, 1:].float()
+                masks_2d = torch.stack(masks_2d, dim=0).float()
         else:
             assert 0 <= s and e <= len(self.masks_2d)
-            masks_2d = self.masks_2d[s:e, 1:].float()
-        inter = F.linear(masks[:, 1:], masks_2d * self.area)  # shape: [K, N], do not need *view_mask
+            masks_2d = self.masks_2d[s:e].float()
+        inter = F.linear(masks, masks_2d * self.area)  # shape: [K, N], do not need *view_mask
         # print(inter.shape, now_area.shape, now_area_2.shape, (now_area_2 - now_area).abs().max())
         area_2d = torch.mv(masks_2d, self.area)  # shape: [Nv] 可以预处理, do not need *view_mask
         match_score = 2. * inter / (area_3d[:, None] + area_2d[None, :]).clamp_min(eps)  # shape: [K, Nv]
+        assert 0 - eps <= match_score.min() and match_score.max() <= 1. + eps
         # print('match_score:', utils.show_shape(match_score), match_score.isnan().any())
         losses['match'] = 1. - (match_score * P).sum(dim=0).mean()
         # losses['match'] = 1. - match_score[torch.argmax(P.T, dim=0), torch.arange(e - s, device=self.device)].mean()
@@ -1348,29 +1488,40 @@ class Tree3Dv2(TreeStructure):
         # # print(score_ci)
         # losses['mm'] = 1 - 2 * (score_ci * scores[pred_idx]).sum() / \
         #                (scores[pred_idx].sum() + match_score.shape[1])  # dice loss
-        losses['vm'] = self.loss_view_mask(match_score, scores)
-        if timer is not None:
-            timer.log('view-masks')
-        losses['mv'] = self.loss_mask_view(match_score, scores)
-        if timer is not None:
-            timer.log('masks-view')
+        if weights.get('vm', 1) > 0:
+            losses['vm'] = self.loss_view_mask(match_score, scores)
+            if timer is not None:
+                timer.log('view-masks')
+        if weights.get('mv', 1) > 0:
+            losses['mv'] = self.loss_mask_view(match_score, scores)
+            if timer is not None:
+                timer.log('masks-view')
         # Tree loss
-        losses['tree'] = self.loss_tree(masks, scores)
-        if timer is not None:
-            timer.log('tree loss')
+        if weights.get('tree', 1) > 0:
+            losses['tree'] = self.loss_tree(masks, scores)
+            if timer is not None:
+                timer.log('tree loss')
+
+        if weights.get('tree2', 0) > 0:
+            losses['tree'] = self.loss_tree_2(masks, scores)
+            if timer is not None:
+                timer.log('tree2 loss')
         # assert not any(torch.isnan(x) for x in losses.values()), losses
         return losses
 
-    def run(self,
-            epochs=10000,
-            N_view=-1,
-            K=0,
-            gnn: nn.Module = None,
-            A: Tensor = None,
-            X: Tensor = None,
-            topP=False,
-            weights: dict = None,
-            print=print):
+    def run(
+        self,
+        epochs=10000,
+        K: int = None,
+        gnn: pyg_nn.GCN = None,
+        A: Tensor = None,
+        X: Tensor = None,
+        topP=False,
+        topP_start=0,
+        weights: dict = None,
+        print=print,
+        use_amp=False,
+    ):
         # torch.cuda.empty_cache()
         torch.set_anomaly_enabled(True)
         # print('[Tree3D] GPU:', utils.get_GPU_memory())
@@ -1378,9 +1529,7 @@ class Tree3Dv2(TreeStructure):
         #     self.load_2d_results(self.save_root, N_view)
         assert self.masks_view is not None
         print('[Tree3D] GPU:', utils.get_GPU_memory())
-        # if self.A is None:
-        #     self.build_graph()
-        K = 2 * self.Lmax if K <= 0 else K
+        K = 2 * self.Lmax if K is None else K
         edge_weight = None
         if gnn is None:
             S = nn.Parameter(torch.randn((self.M, K), device=self.device))
@@ -1399,62 +1548,74 @@ class Tree3Dv2(TreeStructure):
             opt = torch.optim.Adam([S, node_score], lr=1e-3)
         else:
             opt = torch.optim.Adam(list(gnn.parameters()) + [node_score], lr=1e-3)
+        grad_scaler = torch.cuda.amp.GradScaler() if use_amp else None
         # opt = torch.optim.Adam(gnn.parameters(), lr=1e-3)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, epochs, 1e-6)
         meter = ext.DictMeter()
         timer = utils.TimeWatcher()
-
         with torch.enable_grad():
             for epoch in range(epochs):
                 timer.start()
                 view_index = random.randrange(self.V)
-                # print(f"view_index: {view_index}")
                 opt.zero_grad()
-                if gnn is not None:
-                    S = gnn(X.float(), edges, edge_weight=edge_weight)[:self.M]
-                    timer.log('gnn')
-                # print('[Tree3D]', S.aminmax(), X.aminmax(), edge_weight.aminmax())
-                # loss_dict = self.loss_fn(S, node_score)
-
-                # with torch.autograd.profiler.profile() as prof:
+                with torch.amp.autocast(device_type='cuda', enabled=use_amp):
+                    if gnn is not None:
+                        if gnn.supports_edge_weight:
+                            S = gnn(X.float(), edges, edge_weight=edge_weight)[:self.M]
+                        elif gnn.supports_edge_attr and edge_weight is not None:
+                            S = gnn(X.float(), edges, edge_attr=edge_weight[:, None])[:self.M]
+                        else:
+                            S = gnn(X.float(), edges)[:self.M]
+                        if timer is not None:
+                            timer.log('gnn')
                 loss_dict = self.calc_losses(
-                    S,
+                    S.float(),
                     node_score,
                     view_index,
                     A,
-                    progress=epoch / epochs if topP else 1.,
+                    progress=((epoch - topP_start) / (epochs - topP_start)) if topP else 1.,
                     timer=timer,
+                    weights=weights,
                 )
                 total_loss = utils.sum_losses(loss_dict, weights)
                 meter.update(loss_dict)
-                total_loss.backward()
-                timer.log('backward')
-
-                # print(prof.key_averages().table(sort_by="self_cuda_time_total"))
-                opt.step()
+                if use_amp:
+                    grad_scaler.scale(total_loss).backward()
+                    grad_scaler.step(opt)
+                    grad_scaler.update()
+                else:
+                    total_loss.backward()
+                    opt.step()
                 lr_scheduler.step()
-                timer.log('adam')
+                if timer is not None:
+                    timer.log('update')
                 if (epoch + 1) % 100 == 0:
                     print(f"[Tree3D] Epoch {epoch + 1}: loss={total_loss.item():.6f}, {meter.average}")
                     meter.reset()
                 # break
                 # return
-        print(timer)
+        if timer is not None:
+            print(timer)
         with torch.no_grad():
             scores = node_score.detach().sigmoid()
             self.scores, indices = torch.sort(scores, descending=True)
-            if gnn is not None:
-                gnn.eval()
-                S = gnn(X.float(), edges, edge_weight=edge_weight)[:self.M]
+            with torch.amp.autocast(device_type='cuda', enabled=use_amp):
+                if gnn is not None:
+                    gnn.eval()
+                    if gnn.supports_edge_weight:
+                        S = gnn(X.float(), edges, edge_weight=edge_weight)[:self.M]
+                    elif gnn.supports_edge_attr and edge_weight is not None:
+                        S = gnn(X.float(), edges, edge_attr=edge_weight[:, None])[:self.M]
+                    else:
+                        S = gnn(X.float(), edges)[:self.M]
             if topP:
                 values, indices = torch.topk(S, k=1, dim=1)
                 P = torch.scatter(torch.zeros_like(S), 1, indices, values.softmax(dim=1))
             else:
-                P = S.softmax(dim=1)[:, indices]  # shape: (N, C)
+                P = S.float().softmax(dim=1)[:, indices]  # shape: (N, C)
             # self.scores = self.calc_comm_prob(P).mean(dim=0)
             masks = self._get_masks(P.T)  # [C, nF]
-        # TODO: 过滤掉没有对应的Masks
-        self.masks = masks >= 0.5
+        self.masks = F.pad(masks >= 0.5, (1, 0))
         self.masks_area = torch.mv(self.masks[:, 1:].float(), self.area)
         self.scores *= self.masks_area > 0  # remove empty mask
         self.cnt = 0
@@ -1565,6 +1726,23 @@ class Tree3Dv2(TreeStructure):
                 new.masks[x - 1] = temp == x
                 temp[new.masks[x - 1]] = other.parent[x].to(temp.dtype)
         return new
+
+    def get_2d_tree(self, tri_id: Tensor, ignore=100):
+        aux_data = self.get_aux_data(tri_id)
+        levels = self.get_levels(aux_data)
+        masks = []
+        scores = []
+        for level in levels:
+            for x in level:
+                mask, area = aux_data[x.item()]
+                if area > ignore:
+                    masks.append(mask)
+                    scores.append(self.scores[x - 1])
+        tree2d = Tree2D(torch.stack(masks), torch.stack(scores), device=tri_id.device)
+        tree2d.update_tree()
+        tree2d.node_rearrange()
+        tree2d.post_process()
+        return tree2d
 
 
 class AutoEncoder(nn.Module):

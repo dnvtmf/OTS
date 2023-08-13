@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 
 loss=(recon tree mv vm match)
-gpus=(4 5 6 7 0)
-args=( --force-3d )
+gpus=(0 0 0 0 0)
+args=( )
 
 for (( i=0; i < ${#gpus[@]}; ++i ))
 do
