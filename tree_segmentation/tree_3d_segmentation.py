@@ -798,6 +798,7 @@ class Tree3Dv2(TreeStructure):
         print('[Tree3D] GPU:', utils.get_GPU_memory())
         return True
 
+    @torch.no_grad()
     def _get_node_relationship(self, t: TreeStructure):
         M = t.cnt
         v_p = torch.zeros((M, M), dtype=torch.bool, device=self.device)  # all parents
@@ -1022,6 +1023,7 @@ class Tree3Dv2(TreeStructure):
         else:
             areas_m = torch.mv(self.masks_2d, self.area)[:, None].clamp_min(1e-7)
             A[:M, M:] = F.linear(self.masks_2d, self.masks_view.float() * self.area) / areas_m
+            A[M:, :M] = A[:M, M:].T
         # mask-mask
         A[:M, :M] = self.build_graph()
         return A
@@ -1269,8 +1271,8 @@ class Tree3Dv2(TreeStructure):
         gt = torch.zeros_like(predicton, requires_grad=False)
         assert 0 <= indices.min() and indices.max() < len(scores)
         gt[indices] = 1
-        # return F.mse_loss(predicton * scores, gt)
-        return (gt - predicton * scores).mean()
+        return F.mse_loss(predicton * scores, gt)
+        # return (gt - predicton * scores).mean()
 
     def loss_mask_all_view(self, masks: Tensor):
         """ For a 3D mask, all view have a 2D match or empty
@@ -1286,7 +1288,7 @@ class Tree3Dv2(TreeStructure):
         masks = masks[:, self.masks_view[view]]  # [K, Fv]
         R = self.tree2ds[view]  # [2, Mv, Mv ] relationship
         s, e = self.range_view[view]
-        P = P[:, s:e] * scores[:, None]  # [K, Mv]
+        P = P[:, s:e]  # * scores[:, None]  # [K, Mv]
         # with torch.no_grad():
         #     seen = (masks >= 0.5).any(dim=1)  # [K]
         # P = P[seen]
@@ -1313,8 +1315,8 @@ class Tree3Dv2(TreeStructure):
             in_set = []
             for c in t.get_children(p):
                 mask_c = masks[c - 1]
-                inter = torch.sum(masks[x] * mask_c * self.area)
-                in_i = inter / areas[x].clamp_min(1e-7)
+                inter = torch.sum(masks[x - 1] * mask_c * self.area)
+                in_i = inter / areas[x - 1].clamp_min(1e-7)
                 in_c = inter / areas[c - 1].clamp_min(1e-7)
                 if max(in_i, in_c) >= threshold:
                     if in_i > in_c:  # x in c
@@ -1322,14 +1324,17 @@ class Tree3Dv2(TreeStructure):
                         return
                     else:  # c in x
                         in_set.append(c)
-            t.node_insert(x + 1, p)
+            t.node_insert(x, p)
             for c in in_set:
-                t.node_move(c, x + 1)
+                t.node_move(c, x)
             return
 
         tree = TreeStructure(K + 1, device=self.device)
+        # print(tree.cnt, masks.shape)
         for i in range(K):
-            _build_tree(i, tree)
+            idx = tree.node_new()
+            assert idx == i + 1
+            _build_tree(idx, tree)
         return tree
 
     def loss_tree_2(self, masks: Tensor, scores: Tensor, eps=1e-7):
@@ -1434,7 +1439,7 @@ class Tree3Dv2(TreeStructure):
             losses['es'] = self.loss_edge_similarity(P, A)
             if timer is not None:
                 timer.log('edge_sim')
-        if weights.get('t2d', 3) > 0:
+        if weights.get('t2d', 1) > 0:
             losses['t2d'] = self.loss_2d_tree(P, masks, scores)
             if timer is not None:
                 timer.log('t2d')
@@ -1448,21 +1453,10 @@ class Tree3Dv2(TreeStructure):
                 timer.log('recon')
         # 评估Masks投影到当前view后的masks与当前view检测出的结果之间的差别
         s, e = self.range_view[view_index]
-        P = P[:, s:e] * scores[:, None]
+        P = P[:, s:e]
         view_mask = self.masks_view[view_index]  # 当前view的可见部分
         area_3d = torch.mv(masks, view_mask * self.area)  # shape: [K]
         if self._masks_2d_packed:
-            # sm, em = self.range_level[view_index]
-            # area_2d = torch.zeros(e - s + 1, device=self.device)
-            # inter = torch.zeros((P.shape[0], e - s + 1), device=self.device)
-            # area = self.area * view_maskimer is not None:
-
-            # for x in range(sm, em):
-            #     mask_2d = (self.masks_2d[x] - s).clamp(0).long()
-            #     area_2d.scatter_reduce_(0, mask_2d, area, 'sum')
-            #     # print(utils.show_shape(mask_2d[None, :].repeat(P.shape[0], 1), area * masks))
-            #     inter = torch.scatter_reduce(inter, 1, mask_2d.repeat(P.shape[0], 1), area * masks, 'sum')
-            # match_score = 2. * match_score / (area_3d[:, None] + area_2d[None]).clamp_min(eps)
             with torch.no_grad():
                 masks_2d = []
                 for i in range(s, e):
@@ -1476,29 +1470,39 @@ class Tree3Dv2(TreeStructure):
         # print(inter.shape, now_area.shape, now_area_2.shape, (now_area_2 - now_area).abs().max())
         area_2d = torch.mv(masks_2d, self.area)  # shape: [Nv] 可以预处理, do not need *view_mask
         match_score = 2. * inter / (area_3d[:, None] + area_2d[None, :]).clamp_min(eps)  # shape: [K, Nv]
-        # assert 0 - eps <= match_score.min() and match_score.max() <= 1. + eps
+        # match_score = inter / (area_3d[:, None] + area_2d[None, :] - inter).clamp_min(eps)  # shape: [K, Nv]
+        assert 0 - eps <= match_score.min() and match_score.max() <= 1. + eps, f"{match_score.aminmax()}"
         # print('match_score:', utils.show_shape(match_score), match_score.isnan().any())
         losses['match'] = 1. - (match_score * P).sum(dim=0).mean()
-        # losses['match'] = 1. - match_score[torch.argmax(P.T, dim=0), torch.arange(e - s, device=self.device)].mean()
         if timer is not None:
             timer.log('match score')
-        # 所有nodes与当前视角的匹配度
-        # pred_idx, seg_idx = linear_sum_assignment((1 - match_score).detach().cpu().numpy())  # 二分匹配
-        # pred_idx, seg_idx = utils.tensor_to(pred_idx, seg_idx, device=match_score.device)
-        # score_ci = match_score[pred_idx, seg_idx]
-        # # print(score_ci)
-        # losses['mm'] = 1 - 2 * (score_ci * scores[pred_idx]).sum() / \
-        #                (scores[pred_idx].sum() + match_score.shape[1])  # dice loss
-        if weights.get('vm', 3) > 0:
+        # all 2D masks ~ all 3D masks
+        if weights.get('view', 0) > 0:
+            # print(match_score.shape, masks.shape, self.M, e - s)
+            idx3d, idx2d = linear_sum_assignment((1 - match_score).detach().cpu().numpy())  # 二分匹配
+            idx3d, idx2d = utils.tensor_to(idx3d, idx2d, device=match_score.device)
+            # idx3d = match_score.argmax(dim=0)
+            # idx2d = torch.arange(match_score.shape[1], device=idx3d.device)
+            assert idx2d.shape == idx3d.shape
+            score_ci = match_score[idx3d, idx2d]
+
+            seen = area_3d / torch.mv(masks, self.area).clamp_min(eps)
+            no_match = torch.ones(masks.shape[0], device=masks.device, dtype=torch.bool)
+            no_match[idx3d] = 0
+            losses['view'] = ((seen * scores * no_match).sum() + (1 - score_ci * scores[idx3d]).sum()) / len(masks)
+            if timer is not None:
+                timer.log('view')
+
+        if weights.get('vm', 0) > 0:
             losses['vm'] = self.loss_view_mask(match_score, scores)
             if timer is not None:
                 timer.log('view-masks')
-        if weights.get('mv', 1) > 0:
+        if weights.get('mv', 0) > 0:
             losses['mv'] = self.loss_mask_view(match_score, scores)
             if timer is not None:
                 timer.log('masks-view')
         # Tree loss
-        if weights.get('tree', 3) > 0:
+        if weights.get('tree', 1) > 0:
             losses['tree'] = self.loss_tree(masks, scores)
             if timer is not None:
                 timer.log('tree loss')
@@ -1555,8 +1559,8 @@ class Tree3Dv2(TreeStructure):
         meter = ext.DictMeter()
         timer = utils.TimeWatcher()
         if weights is None:
-            weights = {} 
-        weights = {**dict(edge=0, match=0.3, mv=1, recon=0, t2d=3, tree=3, vm=3), **weights}
+            weights = {}
+        weights = {**dict(edge=0, match=1, view=1, mv=0, recon=0, t2d=1, tree=1, vm=0), **weights}
         with torch.enable_grad():
             for epoch in range(epochs):
                 timer.start()

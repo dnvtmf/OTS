@@ -19,4 +19,4 @@ do
         "python evaluation/eval_Replica.py -o ${output} --scene ${scenes[i]} ${args[*]} \
         --loss-weights=edge=0,match=0.3,mv=1,recon=0,t2d=3,tree=3,vm=3
         ^M"
-done 
+done

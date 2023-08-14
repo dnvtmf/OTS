@@ -1,14 +1,11 @@
 #!/usr/bin/env bash
 
-loss=(recon=0.0 recon=0.3 recon=0.6 recon=0.9 \
-       tree=1.0  tree=3.0  tree=6.0  tree=10. \
-         mv=0.3    mv=0.6    mv=1.0    mv=1.5 \
-         vm=1.0    vm=3.0    vm=6.0    vm=10. \
-      match=0.1 match=0.3 match=0.6 match=1.0 \
-       edge=0.0  edge=0.1  edge=0.2  edge=0.3 \
-        t2d=1.0   t2d=3.0   t2d=6.0   t2d=10. \
-     tree=0,tree2=0 tree=0,tree2=0.3 tree=0,tree2=1 tree=0,tree2=3)
-gpus=(0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7)
+
+loss=( tree=0.0  tree=1.0  tree=0.3  tree=3.0 \
+       view=0.0  view=1.0  view=0.3  view=3.0 \
+      match=0.0 match=1.0 match=0.3 match=3.0 \
+        t2d=0.0   t2d=1.0   t2d=0.3   t2d=3.0 )
+gpus=(0 1 2 3 4 5 6 7 0 1 2 3 4 5 6 7)
 args=(-ns=20 --force-3d)
 
 for (( i=0; i < ${#gpus[@]}; ++i ))
