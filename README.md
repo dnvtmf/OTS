@@ -90,11 +90,16 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [x] [Paper] 完成方法和实验部分撰写
 
 ### 8.13 work list
-- [ ] [Paper] 完成方法部分修改
+- [x] [Paper] 完成方法部分修改
 - [ ] [3D] PaperNet上测试所有2D结果的准确率
 - [ ] [3D] PaperNet上测试所有gt_seg的准确率
 - [ ] [3D] Replica 选择视角
-- [ ] [3D] PartNet在测试时去除不可见部分
+- [x] [3D] PartNet在测试时去除不可见部分
+  
+### 8.14 work list
+- [ ] [Paper] 完成所有内容的初稿
+- [ ] [3D] 调整loss参数
+- [ ] [3D] 修改可能的bug
 
 ### future
 - [ ] [3D] Replica 使用高清图片

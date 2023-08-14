@@ -36,6 +36,7 @@ def eval_one(que: Queue, result_paths: List[Path], gpu_id):
     device = torch.device(f"cuda:{gpu_id}")
     # device = torch.device("cpu")
     glctx = dr.RasterizeCudaContext(f"cuda:{gpu_id}")
+    torch.set_default_device(device)
 
     for result_path in result_paths:
         obj_id = result_path.parts[-2]
@@ -48,6 +49,7 @@ def eval_one(que: Queue, result_paths: List[Path], gpu_id):
         m2d = TreeSegmentMetric()
         m3d = TreeSegmentMetric()
         mp = TreeSegmentMetric()
+        g2d = TreeSegmentMetric()
 
         mesh = torch.load(result_path.with_name(f'{result_path.parts[-2]}.mesh_cache'), map_location=device)
         mesh = mesh.to(device)
@@ -91,7 +93,13 @@ def eval_one(que: Queue, result_paths: List[Path], gpu_id):
             tree2d_p = get_2d_tree_from_3d(prediction, tri_ids[view_id])
             mp.update(tree2d_p, tree2d_gt)
 
-        que.put((cat, to_tuple(m2d), to_tuple(m3d), to_tuple(mp)))
+        gt_seg_path = result_path.with_name('gt_seg.tree3dv2')
+        if gt_seg_path.exists():
+            gt_seg = Tree3Dv2(mesh, device=device)
+            gt_seg.load(gt_seg_path)
+            g2d.update(gt_seg, gt)
+
+        que.put((cat, to_tuple(m2d), to_tuple(m3d), to_tuple(mp), to_tuple(g2d)))
 
 
 def main():
@@ -124,6 +132,7 @@ def main():
     metrics_2d = {'all': TreeSegmentMetric()}
     metrics_3d = {'all': TreeSegmentMetric()}
     metrics_p = {'all': TreeSegmentMetric()}
+    metrics_gs = {'all': TreeSegmentMetric()}
 
     print(f"Categories: {len(categories)}")
     for cat in categories:
@@ -131,6 +140,7 @@ def main():
         metrics_2d[cat] = TreeSegmentMetric()
         metrics_3d[cat] = TreeSegmentMetric()
         metrics_p[cat] = TreeSegmentMetric()
+        metrics_gs[cat] = TreeSegmentMetric()
 
     # show_cats = ['Bag', 'Bed', 'Bottle', 'Bowl', 'Chair', 'Clock', 'Dishwasher', 'Display', 'Door', 'Earphone', 'Faucet', 'Hat', 'Keyboard', 'Knife', 'Lamp', 'Laptop', 'Microwave', 'Mug', 'Refrigerator', 'Scissors', 'StorageFurniture', 'Table', 'TrashCan', 'Vase']
     show_cats = [
@@ -141,25 +151,29 @@ def main():
     # for step, result_path in enumerate(tqdm(all_results), 1):
     process_list = []
     que = Queue()
-    num_gpus = 2
+    num_gpus = 10
     N = len(all_results)
     for i in range(num_gpus):
-        p = Process(target=eval_one, args=(que, all_results[i * N // num_gpus:(i + 1) * N // num_gpus], 8 + i))
+        p = Process(target=eval_one, args=(que, all_results[i * N // num_gpus:(i + 1) * N // num_gpus], i))
         p.start()
         process_list.append(p)
     for step in tqdm(range(N)):
-        cat, m2d_data, m3d_data, mp_data = que.get()
+        cat, m2d_data, m3d_data, mp_data, gs_data = que.get()
         add_from_tuple(metrics_2d['all'], m2d_data)
         add_from_tuple(metrics_2d[cat], m2d_data)
         add_from_tuple(metrics_3d['all'], m3d_data)
         add_from_tuple(metrics_3d[cat], m3d_data)
         add_from_tuple(metrics_p['all'], mp_data)
         add_from_tuple(metrics_p[cat], mp_data)
+        add_from_tuple(metrics_gs['all'], gs_data)
+        add_from_tuple(metrics_gs[cat], gs_data)
 
         print(f'Complete {step+1}/{len(all_results)}')
         print(f'3D, {", ".join([f"{k}={v:.4f}" for k, v in metrics_3d["all"].summarize().items()])}')
         print(f'2D, {", ".join([f"{k}={v:.4f}" for k, v in metrics_2d["all"].summarize().items()])}')
         print(f'P , {", ".join([f"{k}={v:.4f}" for k, v in metrics_p["all"].summarize().items()])}')
+        print(f'GT, {", ".join([f"{k}={v:.4f}" for k, v in metrics_gs["all"].summarize().items()])}')
+        print('num:', metrics_3d['all'].cnt, metrics_2d['all'].cnt, metrics_p['all'].cnt, metrics_gs['all'].cnt)
     [p.join() for p in process_list]
     with open(save_root.joinpath('metrics.csv'), 'w') as f:
         f.write(f"type, cat, {', '.join(metrics_3d['all'].summarize().keys())}\n")

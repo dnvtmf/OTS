@@ -1,10 +1,7 @@
-import json
 from pathlib import Path
 import torch
-import json
 from tqdm import tqdm
 
-from tree_segmentation.extension import utils
 from tree_segmentation import TreeSegmentMetric, Tree2D
 
 save_root = Path('./results/cache/SA_1B')
@@ -28,16 +25,18 @@ for suffix in [
         pd.load(save_root.joinpath(suffix, filename))
         num_pd += pd.cnt
         metric.update(pd, gt)
+        # break
     msg = [f"{suffix:20}"] + [f"{k}={v:.4f}" for k, v in metric.summarize().items()]
     msg.append(f"num={num_pd/len(filenames):5.1f}")
     print(', '.join(msg))
     f.write(', '.join(msg) + '\n')
+    # break
 
 metric = TreeSegmentMetric()
 num_gt = 0
 for filename in tqdm(filenames):
     gt = Tree2D(device=device)
-    gt.load(save_gt_dir.joinpath(filename.name).with_suffix('.tree2d'))
+    gt.load(save_gt_dir.joinpath(filename).with_suffix('.tree2d'))
     num_gt += gt.cnt
     metric.update(gt, gt)
 msg = [f"{'gt':20}"] + [f"{k}={v:.4f}" for k, v in metric.summarize().items()]

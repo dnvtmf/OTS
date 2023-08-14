@@ -55,6 +55,7 @@ class TreeSegmentMetric:
         if prediction.cnt == 0:
             self.cnt += 1
             return
+        ## calc IoU
         if type(gt).__name__.startswith('Tree3D'):
             IoU, indices_pd, indices_gt = self.calc_IoU_3d(prediction, gt)
         elif type(gt).__name__ == 'Tree2D':  # isinstance(gt, Tree2D):
@@ -64,73 +65,62 @@ class TreeSegmentMetric:
         N, M = IoU.shape
         if M == 0:
             return
-        # TS = self.calc_tree_structure_score(prediction, indices_pd)
-        TS = self.calc_tree_structure_score_2(prediction, indices_pd).item()
-        # assert 0 <= TS.min() and TS.max() <= 1. + 1e-4, f"{TS.aminmax()}"
-        if not (0 <= TS <= 1. + 1e-4):
-            print(f"TS not in [0, 1]: {TS}")
-        # get TQ
-        matched_iou, matched = IoU.max(dim=1)
+        ## calc MaxIoU  the largest IoU for each GT
+        matched_iou, matched = IoU.max(dim=0)
         self.maxIoU_sum += matched_iou.mean().item()
-        # iou_ = torch.zeros_like(IoU)
-        # iou_[torch.arange(N, device=iou_.device), matched] = matched_iou * (matched_iou >= self.iou_threshold)
-        # iou_ = torch.cummax(iou_, dim=0)[0]
-        # # print(TS.shape, iou_.shape)
-        # TP = (iou_ > 0).sum(dim=1)
-        # FP = torch.arange(N, device=TP.device, dtype=TP.dtype) + 1 - TP
-        # FN = M - TP
-        # iou_ = iou_.sum(dim=1)
-        # SQ = iou_ / TP.clamp_min(self.eps)  # to avoid divided zero
-        # RQ = TP / (TP + FP * 0.5 + FN * 0.5).clamp_min(self.eps)
-        # PQ = iou_ / (TP + FP * 0.5 + FN * 0.5).clamp_min(self.eps)
-        # TQ = PQ * TS
-        # self.mSQ_sum += SQ.mean().item()
-        # self.mRQ_sum += RQ.mean().item()
-        # self.mPQ_sum += PQ.mean().item()
-        # self.mTS_sum += TS.mean().item()
-        # self.mTQ_sum += TQ.mean().item()
-        self.TS_sum += TS  # TS[-1].item()
-        # self.TQ_sum += TQ[-1].item()
-        # self.SQ_sum += SQ[-1].item()
-        # self.RQ_sum += RQ[-1].item()
-        # self.PQ_sum += PQ[-1].item()
-
-        # get PQ
-        IoU = IoU * (IoU >= self.iou_threshold)
-        IoU = IoU.detach().cpu().numpy()
-        pred_idx, gt_idx = linear_sum_assignment(1 - IoU)
-        mask = IoU[pred_idx, gt_idx] >= self.iou_threshold
-        pred_idx, gt_idx = pred_idx[mask], gt_idx[mask]
-        TP = len(mask)
+        ## calc Tree Structure Score (TSS)
+        # TSS = self.calc_tree_structure_score(prediction, indices_pd)
+        # assert 0 <= TS.min() and TS.max() <= 1. + 1e-4, f"{TS.aminmax()}"
+        TSS = self.calc_tree_structure_score_2(prediction, indices_pd).item()
+        if not (0 <= TSS <= 1. + 1e-4):
+            print(f"TS not in [0, 1]: {TSS}")
+        self.TS_sum += TSS
+        ## find match
+        ### 二分匹配
+        # IoU = IoU * (IoU >= self.iou_threshold)
+        # IoU = IoU.detach().cpu().numpy()
+        # pred_idx, gt_idx = linear_sum_assignment(1 - IoU)
+        # matched_iou = IoU[pred_idx, gt_idx]
+        # mask = matched_iou >= self.iou_threshold
+        # pred_idx, gt_idx, matched_iou = pred_idx[mask], gt_idx[mask], matched_iou[mask]
+        ### 分步匹配
+        matched_iou, matched = IoU.max(dim=1)  # find the largest IoU for each prediction
+        t = torch.zeros_like(IoU)
+        t[torch.arange(N, device=IoU.device), matched] = matched_iou
+        matched_iou, pred_idx = t.max(dim=0)  # find the largest IoU for each ground truth
+        mask = matched_iou >= self.iou_threshold
+        pred_idx, gt_idx, matched_iou = pred_idx[mask], torch.arange(M, device=IoU.device)[mask], matched_iou[mask]
+        ## calc SQ, RQ, PQ, TQ
+        TP = len(pred_idx)
         FP = N - TP
         FN = M - TP
-        iou = IoU[pred_idx, gt_idx].sum()
-        SQ = iou / max(TP, self.eps)
+        SQ = matched_iou.sum().item() / max(TP, self.eps)
         RQ = TP / max(TP + FP * 0.5 + FN * 0.5, self.eps)
         self.SQ_sum += SQ
         self.RQ_sum += RQ
         self.PQ_sum += SQ * RQ
-        self.TQ_sum += SQ * RQ * TS
+        self.TQ_sum += SQ * RQ * TSS
 
         self.cnt += 1
 
         # output match result
         if not return_match:
             return
-        assert 0 <= pred_idx.min() and pred_idx.max() < len(indices_pd)
-        assert 0 <= gt_idx.min() and gt_idx.max() < len(indices_gt)
-        iou = IoU[pred_idx, gt_idx]
-        pred_idx = indices_pd.cpu().numpy()[pred_idx]
-        gt_idx = indices_gt.cpu().numpy()[gt_idx]
-        match = np.full(prediction.cnt + 1, -1, dtype=np.int32)
-        matched = np.full(gt.cnt + 1, -1, dtype=np.int32)
-        match_iou = np.zeros(prediction.cnt + 1, dtype=np.float32)
-        matched_iou = np.zeros(gt.cnt + 1, dtype=np.float32)
-        match[pred_idx] = gt_idx
-        matched[gt_idx] = pred_idx
-        match_iou[pred_idx] = matched_iou[gt_idx] = iou
-        # print(match, match_iou, matched, matched_iou, sep='\n')
-        return match, match_iou, matched, matched_iou
+        raise NotImplementedError
+        # assert 0 <= pred_idx.min() and pred_idx.max() < len(indices_pd)
+        # assert 0 <= gt_idx.min() and gt_idx.max() < len(indices_gt)
+        # iou = IoU[pred_idx, gt_idx]
+        # pred_idx = indices_pd.cpu().numpy()[pred_idx]
+        # gt_idx = indices_gt.cpu().numpy()[gt_idx]
+        # match = np.full(prediction.cnt + 1, -1, dtype=np.int32)
+        # matched = np.full(gt.cnt + 1, -1, dtype=np.int32)
+        # match_iou = np.zeros(prediction.cnt + 1, dtype=np.float32)
+        # matched_iou = np.zeros(gt.cnt + 1, dtype=np.float32)
+        # match[pred_idx] = gt_idx
+        # matched[gt_idx] = pred_idx
+        # match_iou[pred_idx] = matched_iou[gt_idx] = iou
+        # # print(match, match_iou, matched, matched_iou, sep='\n')
+        # return match, match_iou, matched, matched_iou
 
     def calc_IoU_3d(self, prediction, gt):
         # type: (Union[Tree3D, Tree3Dv2],  Union[Tree3D, Tree3Dv2])-> Tuple[Tensor, Tensor, Tensor]

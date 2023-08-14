@@ -119,7 +119,7 @@ def get_images_best_view(glctx,
     Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=device)
     Tw2c = Tv2c @ Tw2vs
 
-    best_indices = choose_best_views(glctx, mesh, Tw2c, num_views, image_size, num_split)
+    best_indices = choose_best_views(glctx, mesh, Tw2c, num_views, image_size=image_size, num_split=num_split)
     Tw2vs = Tw2vs[best_indices]
 
     images = []

@@ -808,11 +808,12 @@ class Tree2D(TreeStructure):
     def remove_background(self, background: Tensor, threshold=0.5):
         """The masks belong to background"""
         self.uncompress()
-        # print(utils.show_shape(self._masks, self._areas, self.scores))
         keep = torch.ones(self.num_masks + 1, device=self.device, dtype=torch.bool)
         for i in range(self.num_masks):
             mask = self._masks[i]
-            if (mask & background).sum() / mask.sum() >= threshold:  # remove when area rate >= threshold
+            area = mask.sum()
+            bg_area = (mask & background).sum()
+            if (area - bg_area) <= self.min_area or bg_area / area >= threshold:
                 keep[i + 1] = False
         if keep.all():
             return
