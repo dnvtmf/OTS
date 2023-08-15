@@ -65,6 +65,9 @@ class TreeSegmentMetric:
         N, M = IoU.shape
         if M == 0:
             return
+        if N == 0:
+            self.cnt += 1
+            return
         ## calc MaxIoU  the largest IoU for each GT
         matched_iou, matched = IoU.max(dim=0)
         self.maxIoU_sum += matched_iou.mean().item()

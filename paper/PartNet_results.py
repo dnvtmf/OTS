@@ -11,7 +11,6 @@ from typing import List
 from tree_segmentation.extension import utils, ops_3d
 from tree_segmentation import Tree3Dv2, TreeSegmentMetric, Tree2D
 
-from paper.paper_util import get_2d_tree_from_3d
 from multiprocessing import Process, Queue, set_start_method
 
 data_root = Path('~/data/PartNet/data_v0').expanduser()
@@ -31,34 +30,28 @@ def add_from_tuple(m: TreeSegmentMetric, data):
     m.cnt += data[6]
 
 
-def eval_one(que: Queue, result_paths: List[Path], gpu_id):
-    torch.set_grad_enabled(False)
-    device = torch.device(f"cuda:{gpu_id}")
-    # device = torch.device("cpu")
-    glctx = dr.RasterizeCudaContext(f"cuda:{gpu_id}")
-    torch.set_default_device(device)
+def eval_one(que: Queue, result_path: Path, device, glctx, eval_2d=False):
+    obj_id = result_path.parts[-2]
+    # print(result_path, obj_id)
+    assert data_root.joinpath(obj_id).exists()
+    with data_root.joinpath(obj_id, 'meta.json').open('r') as f:
+        meta = json.load(f)
+        cat = meta['model_cat']
 
-    for result_path in result_paths:
-        obj_id = result_path.parts[-2]
-        # print(result_path, obj_id)
-        assert data_root.joinpath(obj_id).exists()
-        with data_root.joinpath(obj_id, 'meta.json').open('r') as f:
-            meta = json.load(f)
-            cat = meta['model_cat']
+    m2d = TreeSegmentMetric()
+    m3d = TreeSegmentMetric()
+    mp = TreeSegmentMetric()
+    g2d = TreeSegmentMetric()
 
-        m2d = TreeSegmentMetric()
-        m3d = TreeSegmentMetric()
-        mp = TreeSegmentMetric()
-        g2d = TreeSegmentMetric()
+    mesh = torch.load(result_path.with_name(f'{result_path.parts[-2]}.mesh_cache'), map_location=device)
+    mesh = mesh.to(device)
+    gt = Tree3Dv2(mesh, device=device)
+    gt.load(result_path.with_name('gt.tree3dv2'))
+    prediction = Tree3Dv2(mesh, device=device)
+    prediction.load(result_path)
+    m3d.update(prediction, gt)
 
-        mesh = torch.load(result_path.with_name(f'{result_path.parts[-2]}.mesh_cache'), map_location=device)
-        mesh = mesh.to(device)
-        gt = Tree3Dv2(mesh, device=device)
-        gt.load(result_path.with_name('gt.tree3dv2'))
-        prediction = Tree3Dv2(mesh, device=device)
-        prediction.load(result_path)
-        m3d.update(prediction, gt)
-
+    if prediction.face_mask is None or eval_2d:
         Tw2vs = torch.load(result_path.parent.joinpath("images", "Tw2v.pth"), map_location=device)
         num_views = len(Tw2vs)
         image_size = (512, 512)
@@ -68,16 +61,18 @@ def eval_one(que: Queue, result_paths: List[Path], gpu_id):
         rast, _ = dr.rasterize(glctx, v_pos.to(device), mesh.f_pos.int().to(device), image_size)
         tri_ids = rast[..., -1].int().to(device)
 
+    if prediction.face_mask is None:
         face_mask = torch.zeros(mesh.f_pos.shape[0] + 1, dtype=torch.bool, device=device)
         face_mask[torch.unique(tri_ids)] = 1
         gt.face_mask = face_mask
-        # print(utils.show_shape(tri_ids))
+    # print(utils.show_shape(tri_ids))
+    if eval_2d:
         for view_id in range(num_views):
             tree2d_path = result_path.parent.joinpath(f"view_{view_id:04d}.data")  # type: Path
             if not tree2d_path.is_file():
                 print(f"file {tree2d_path} is not exists")
                 continue
-            tree2d_gt = get_2d_tree_from_3d(gt, tri_ids[view_id])
+            tree2d_gt = gt.get_2d_tree(tri_ids[view_id])
 
             tree2d_pd = Tree2D(device=device)
             pth = torch.load(tree2d_path, map_location=device)
@@ -90,16 +85,31 @@ def eval_one(que: Queue, result_paths: List[Path], gpu_id):
             assert tree2d_gt.parent.lt(0).any()
             m2d.update(tree2d_pd, tree2d_gt)
 
-            tree2d_p = get_2d_tree_from_3d(prediction, tri_ids[view_id])
+            tree2d_p = prediction.get_2d_tree(tri_ids[view_id])
             mp.update(tree2d_p, tree2d_gt)
 
-        gt_seg_path = result_path.with_name('gt_seg.tree3dv2')
-        if gt_seg_path.exists():
-            gt_seg = Tree3Dv2(mesh, device=device)
-            gt_seg.load(gt_seg_path)
-            g2d.update(gt_seg, gt)
+    gt_seg_path = result_path.with_name('gt_seg.tree3dv2')
+    if gt_seg_path.exists():
+        gt_seg = Tree3Dv2(mesh, device=device)
+        gt_seg.load(gt_seg_path)
+        g2d.update(gt_seg, gt)
 
-        que.put((cat, to_tuple(m2d), to_tuple(m3d), to_tuple(mp), to_tuple(g2d)))
+    que.put((cat, to_tuple(m2d), to_tuple(m3d), to_tuple(mp), to_tuple(g2d)))
+
+
+def eval_many(que: Queue, result_paths: List[Path], gpu_id):
+    torch.set_grad_enabled(False)
+    device = torch.device(f"cuda:{gpu_id}")
+    # device = torch.device("cpu")
+    glctx = dr.RasterizeCudaContext(f"cuda:{gpu_id}")
+    torch.set_default_device(device)
+
+    limit = len(result_paths)
+    for i, result_path in enumerate(result_paths):
+        try:
+            eval_one(que, result_path, device, glctx, eval_2d=i < limit)
+        except Exception as e:
+            print(str(e))
 
 
 def main():
@@ -154,11 +164,11 @@ def main():
     num_gpus = 10
     N = len(all_results)
     for i in range(num_gpus):
-        p = Process(target=eval_one, args=(que, all_results[i * N // num_gpus:(i + 1) * N // num_gpus], i))
+        p = Process(target=eval_many, args=(que, all_results[i * N // num_gpus:(i + 1) * N // num_gpus], i))
         p.start()
         process_list.append(p)
     for step in tqdm(range(N)):
-        cat, m2d_data, m3d_data, mp_data, gs_data = que.get()
+        cat, m2d_data, m3d_data, mp_data, gs_data = que.get(timeout=3600)
         add_from_tuple(metrics_2d['all'], m2d_data)
         add_from_tuple(metrics_2d[cat], m2d_data)
         add_from_tuple(metrics_3d['all'], m3d_data)
@@ -174,15 +184,20 @@ def main():
         print(f'P , {", ".join([f"{k}={v:.4f}" for k, v in metrics_p["all"].summarize().items()])}')
         print(f'GT, {", ".join([f"{k}={v:.4f}" for k, v in metrics_gs["all"].summarize().items()])}')
         print('num:', metrics_3d['all'].cnt, metrics_2d['all'].cnt, metrics_p['all'].cnt, metrics_gs['all'].cnt)
+        if (step + 1) % 100 == 0:
+            with open(save_root.joinpath('metrics.csv'), 'w') as f:
+                f.write(f"type, cat, {', '.join(metrics_3d['all'].summarize().keys())}\n")
+                for k, v in metrics_3d.items():
+                    f.write(f'3D, {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
+                for k, v in metrics_2d.items():
+                    f.write(f'2D, {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
+                for k, v in metrics_p.items():
+                    f.write(f'P , {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
+                # f.write(
+                #     f"num: {metrics_3d['all'].cnt}, {metrics_2d['all'].cnt}, {metrics_p['all'].cnt}, {metrics_gs['all'].cnt}\n"
+                # )
+
     [p.join() for p in process_list]
-    with open(save_root.joinpath('metrics.csv'), 'w') as f:
-        f.write(f"type, cat, {', '.join(metrics_3d['all'].summarize().keys())}\n")
-        for k, v in metrics_3d.items():
-            f.write(f'3D, {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
-        for k, v in metrics_2d.items():
-            f.write(f'2D, {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
-        for k, v in metrics_p.items():
-            f.write(f'P , {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
 
 
 if __name__ == '__main__':

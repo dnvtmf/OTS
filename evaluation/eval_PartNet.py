@@ -352,7 +352,7 @@ def eval_one(
         else:
             images, tri_ids, Tw2vs = load_images(glctx, mesh, image_dir, num_views=num_views)
         print('[Image] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
-        if run_2d:
+        if run_2d and not args.gt_2d:
             run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
             print('[2D] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
         del images, Tw2vs
@@ -393,15 +393,15 @@ def eval_one(
         else:
             gnn_m = {
                 'GCN': pyg_nn.GCN,
-                'GCN2': pyg_nn.GCN2Conv,
+                # 'GCN2': pyg_nn.GCN2Conv,
                 'GAT': pyg_nn.GAT,
-                'CHEB': pyg_nn.ChebConv,
-                'GRAPH': pyg_nn.GraphConv,
-                'LG': pyg_nn.LGConv,
-                'FA': pyg_nn.FAConv,
-                'LE': pyg_nn.LEConv,
-                'SSG': pyg_nn.SSGConv,
-                'SG': pyg_nn.SGConv,
+                # 'CHEB': pyg_nn.ChebConv,
+                # 'GRAPH': pyg_nn.GraphConv,
+                # 'LG': pyg_nn.LGConv,
+                # 'FA': pyg_nn.FAConv,
+                # 'LE': pyg_nn.LEConv,
+                # 'SSG': pyg_nn.SSGConv,
+                # 'SG': pyg_nn.SGConv,
             }[gnn_type]
             gnn = gnn_m(
                 in_channels=X.shape[1],
@@ -415,7 +415,7 @@ def eval_one(
             epochs=epochs_run,
             K=K,
             gnn=gnn,
-            A=A * A.ge(0.5),
+            A=A,
             X=X,
             weights=args.loss_weights,
             print=print,

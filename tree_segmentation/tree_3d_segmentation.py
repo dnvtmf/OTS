@@ -1259,18 +1259,18 @@ class Tree3Dv2(TreeStructure):
             scores: shape [K]
         """
         # 二分匹配
-        # predicton = match_scores.amax(dim=1)
-        # idx3d, idx2d = linear_sum_assignment((1 - match_scores).detach().cpu().numpy())  # 二分匹配
-        # idx3d, idx2d = utils.tensor_to(idx3d, idx2d, device=match_scores.device)
-        # predicton[idx3d] = match_scores[idx3d, idx2d]
-        # gt = torch.zeros_like(scores, requires_grad=False)
-        # gt[idx3d] = 1
+        predicton = match_scores.amax(dim=1).clone()
+        idx3d, idx2d = linear_sum_assignment((1 - match_scores).detach().cpu().numpy())  # 二分匹配
+        idx3d, idx2d = utils.tensor_to(idx3d, idx2d, device=match_scores.device)
+        predicton[idx3d] = match_scores[idx3d, idx2d]
+        gt = torch.zeros_like(scores, requires_grad=False)
+        gt[idx3d] = 1
         # 最大匹配
-        predicton = match_scores.amax(dim=1)  # [K]
-        indices = match_scores.argmax(dim=0)  # [Mv]
-        gt = torch.zeros_like(predicton, requires_grad=False)
-        assert 0 <= indices.min() and indices.max() < len(scores)
-        gt[indices] = 1
+        # predicton = match_scores.amax(dim=1)  # [K]
+        # indices = match_scores.argmax(dim=0)  # [Mv]
+        # gt = torch.zeros_like(predicton, requires_grad=False)
+        # assert 0 <= indices.min() and indices.max() < len(scores)
+        # gt[indices] = 1
         return F.mse_loss(predicton * scores, gt)
         # return (gt - predicton * scores).mean()
 
@@ -1469,11 +1469,19 @@ class Tree3Dv2(TreeStructure):
         inter = F.linear(masks, masks_2d * self.area)  # shape: [K, N], do not need *view_mask
         # print(inter.shape, now_area.shape, now_area_2.shape, (now_area_2 - now_area).abs().max())
         area_2d = torch.mv(masks_2d, self.area)  # shape: [Nv] 可以预处理, do not need *view_mask
-        match_score = 2. * inter / (area_3d[:, None] + area_2d[None, :]).clamp_min(eps)  # shape: [K, Nv]
-        # match_score = inter / (area_3d[:, None] + area_2d[None, :] - inter).clamp_min(eps)  # shape: [K, Nv]
-        assert 0 - eps <= match_score.min() and match_score.max() <= 1. + eps, f"{match_score.aminmax()}"
+        # match_score = 2. * inter / (area_3d[:, None] + area_2d[None, :]).clamp_min(eps)  # shape: [K, Nv]
+        match_score = inter / (area_3d[:, None] + area_2d[None, :] - inter).clamp_min(eps)  # shape: [K, Nv]
+        # assert 0 - eps <= match_score.min() and match_score.max() <= 1. + eps, f"{match_score.aminmax()}"
         # print('match_score:', utils.show_shape(match_score), match_score.isnan().any())
         losses['match'] = 1. - (match_score * P).sum(dim=0).mean()
+        # losses['match'] = ((1. - match_score) * P).sum(dim=0).mean()
+        # shape = (match_score.shape[0], e - s, e - s)
+        # diff = F.mse_loss(match_score[:, None, :].expand(shape), A[None, s:e, s:e].expand(shape), reduction='none')
+        # diff = diff.sum(dim=-1)  # [K, Nv]
+        # losses['match'] = (diff * P).sum(dim=0).mean()
+        # matched = diff.argmin(dim=0)
+        # losses['match'] = F.cross_entropy(logits[s:e], matched) + \
+        #      diff[matched, torch.arange(e - s, device=self.device)].mean()
         if timer is not None:
             timer.log('match score')
         # all 2D masks ~ all 3D masks
@@ -1542,10 +1550,13 @@ class Tree3Dv2(TreeStructure):
         else:
             assert A is not None and X is not None
             # assert A.shape == (self.M, self.M) and X.shape[0] == self.M
-            edges = torch.nonzero(A).T
+            A_ = A.clone()
+            A_[:self.M, :self.M] *= A_[:self.M, :self.M].ge(0.5)
+            edges = torch.nonzero(A_).T
             if A.dtype.is_floating_point:
-                edge_weight = A[edges[0], edges[1]]
+                edge_weight = A_[edges[0], edges[1]]
             S = None
+            del A_
         node_score = nn.Parameter(torch.randn((K,), device=self.device))
         print('[Tree3D] GPU:', utils.get_GPU_memory())
         # nn.init.normal_(S)
@@ -1560,7 +1571,8 @@ class Tree3Dv2(TreeStructure):
         timer = utils.TimeWatcher()
         if weights is None:
             weights = {}
-        weights = {**dict(edge=0, match=1, view=1, mv=0, recon=0, t2d=1, tree=1, vm=0), **weights}
+        weights = {**dict(match=1, view=1, mv=1, recon=1, t2d=1, tree=1, vm=1), **weights}
+        print(f'loss weights: {weights}')
         with torch.enable_grad():
             for epoch in range(epochs):
                 timer.start()
@@ -1569,15 +1581,15 @@ class Tree3Dv2(TreeStructure):
                 with torch.amp.autocast(device_type='cuda', enabled=use_amp):
                     if gnn is not None:
                         if gnn.supports_edge_weight:
-                            S = gnn(X.float(), edges, edge_weight=edge_weight)[:self.M]
+                            S = gnn(X.float(), edges, edge_weight=edge_weight)
                         elif gnn.supports_edge_attr and edge_weight is not None:
-                            S = gnn(X.float(), edges, edge_attr=edge_weight[:, None])[:self.M]
+                            S = gnn(X.float(), edges, edge_attr=edge_weight[:, None])
                         else:
-                            S = gnn(X.float(), edges)[:self.M]
+                            S = gnn(X.float(), edges)
                         if timer is not None:
                             timer.log('gnn')
                 loss_dict = self.calc_losses(
-                    S.float(),
+                    S[:self.M].float(),
                     node_score,
                     view_index,
                     A,
@@ -1746,6 +1758,10 @@ class Tree3Dv2(TreeStructure):
                 if area > ignore:
                     masks.append(mask)
                     scores.append(self.scores[x - 1])
+        if len(masks) == 0:
+            masks = torch.zeros((0, *tri_id.shape), dtype=torch.bool, device=tri_id.device)
+            scores = torch.zeros((0,), dtype=torch.float, device=tri_id.device)
+            return Tree2D(masks, scores, device=tri_id.device)
         tree2d = Tree2D(torch.stack(masks), torch.stack(scores), device=tri_id.device)
         tree2d.update_tree()
         tree2d.node_rearrange()

@@ -147,23 +147,22 @@ class TreePredictor:
         self.output_mode = output_mode
 
     @torch.no_grad()
-    def tree_generate(
-        self,
-        image: np.ndarray,
-        points_per_side: Optional[int] = 32,
-        points_per_update: int = 256,
-        min_mask_region_area: int = 50,
-        max_steps=100,
-        in_threshold=0.80,
-        in_thre_area=10,
-        union_threshold=0.10,
-        ratio=0.5,
-        sample_limit_fn=None,
-        device=None,
-        verbose=0,
-        timer: TimeWatcher = None,
-        compress=True,
-    ) -> Tree2D:
+    def tree_generate(self,
+                      image: np.ndarray,
+                      points_per_side: Optional[int] = 32,
+                      points_per_update: int = 256,
+                      min_mask_region_area: int = 50,
+                      max_steps=100,
+                      in_threshold=0.80,
+                      in_thre_area=10,
+                      union_threshold=0.10,
+                      ratio=0.5,
+                      sample_limit_fn=None,
+                      device=None,
+                      verbose=0,
+                      timer: TimeWatcher = None,
+                      compress=True,
+                      tree2d: Tree2D = None) -> Tree2D: 
         assert image.shape[-1] == 3
         if timer is not None:
             timer.start()
@@ -177,17 +176,20 @@ class TreePredictor:
         if timer is not None:
             timer.log('decode', len(init_points))
 
-        tree2d = Tree2D(
-            data,
-            in_threshold=in_threshold,
-            union_threshold=union_threshold,
-            min_area=min_mask_region_area,
-            in_thres_area=in_thre_area,
-            device=device,
-            verbose=verbose,
-        )
         num_masks = len(data['masks'])
-        num_ignored = tree2d.update_tree()
+        if tree2d is None:
+            tree2d = Tree2D(
+                data,
+                in_threshold=in_threshold,
+                union_threshold=union_threshold,
+                min_area=min_mask_region_area,
+                in_thres_area=in_thre_area,
+                device=device,
+                verbose=verbose,
+            )
+            num_ignored = tree2d.update_tree()
+        else:
+            num_ignored = tree2d.insert_batch(data)
         tree2d.remove_not_in_tree()
         if timer is not None:
             timer.log('tree', len(init_points))
