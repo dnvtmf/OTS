@@ -40,6 +40,7 @@ class TreeSegmentMetric:
             'SS_sum': self.SS_sum,
             'TQ_sum': self.TQ_sum,
             'maxIoU_sum': self.maxIoU_sum,
+            'mean_recall': self.mean_recall,
         }
 
     def add_pack(self, data: dict):
@@ -89,7 +90,7 @@ class TreeSegmentMetric:
         for t in range(50, 100, 5):
             mr += (matched_iou >= (t / 100.)).sum() / M
         self.mean_recall += mr / 10
-        
+
         mask = matched_iou >= self.iou_threshold
         pred_idx, gt_idx, matched_iou = pred_idx[mask], gt_idx[mask], matched_iou[mask]
         ### 分步匹配

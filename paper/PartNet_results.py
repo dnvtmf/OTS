@@ -104,7 +104,7 @@ def eval_many(que: Queue, result_paths: List[Path], gpu_id):
     glctx = dr.RasterizeCudaContext(f"cuda:{gpu_id}")
     torch.set_default_device(device)
 
-    limit = len(result_paths)
+    limit = 0  # len(result_paths)
     for i, result_path in enumerate(result_paths):
         try:
             eval_one(que, result_path, device, glctx, eval_2d=i < limit)
@@ -161,7 +161,7 @@ def main():
     # for step, result_path in enumerate(tqdm(all_results), 1):
     process_list = []
     que = Queue()
-    num_gpus = 10
+    num_gpus = 4
     N = len(all_results)
     for i in range(num_gpus):
         p = Process(target=eval_many, args=(que, all_results[i * N // num_gpus:(i + 1) * N // num_gpus], i))
