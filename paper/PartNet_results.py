@@ -17,14 +17,14 @@ data_root = Path('~/data/PartNet/data_v0').expanduser()
 
 
 def to_tuple(m: TreeSegmentMetric):
-    return (m.SQ_sum, m.RQ_sum, m.PQ_sum, m.TS_sum, m.TQ_sum, m.maxIoU_sum, m.cnt)
+    return (m.SQ_sum, m.RQ_sum, m.PQ_sum, m.SS_sum, m.TQ_sum, m.maxIoU_sum, m.cnt)
 
 
 def add_from_tuple(m: TreeSegmentMetric, data):
     m.SQ_sum += data[0]
     m.RQ_sum += data[1]
     m.PQ_sum += data[2]
-    m.TS_sum += data[3]
+    m.SS_sum += data[3]
     m.TQ_sum += data[4]
     m.maxIoU_sum += data[5]
     m.cnt += data[6]
@@ -74,16 +74,16 @@ def eval_one(que: Queue, result_path: Path, device, glctx, eval_2d=False):
                 continue
             tree2d_gt = gt.get_2d_tree(tri_ids[view_id])
 
-            tree2d_pd = Tree2D(device=device)
-            pth = torch.load(tree2d_path, map_location=device)
-            # print(utils.show_shape(pth))
-            tree2d_pd.load(None, **pth['tree_data'])
-            tree2d_pd.remove_background(tri_ids[view_id].eq(0))
-            tree2d_pd.post_process()
-            tree2d_pd.remove_not_in_tree()
-            assert tree2d_pd.parent.lt(0).any()
-            assert tree2d_gt.parent.lt(0).any()
-            m2d.update(tree2d_pd, tree2d_gt)
+            # tree2d_pd = Tree2D(device=device)
+            # pth = torch.load(tree2d_path, map_location=device)
+            # # print(utils.show_shape(pth))
+            # tree2d_pd.load(None, **pth['tree_data'])
+            # tree2d_pd.remove_background(tri_ids[view_id].eq(0))
+            # tree2d_pd.post_process()
+            # tree2d_pd.remove_not_in_tree()
+            # assert tree2d_pd.parent.lt(0).any()
+            # assert tree2d_gt.parent.lt(0).any()
+            # m2d.update(tree2d_pd, tree2d_gt)
 
             tree2d_p = prediction.get_2d_tree(tri_ids[view_id])
             mp.update(tree2d_p, tree2d_gt)
@@ -157,7 +157,7 @@ def main():
         'Bed', 'Chair', 'Clock', 'Dishwasher', 'Display', 'Door', 'Earphone', 'Faucet', 'Knife', 'Lamp', 'Microwave',
         'Refrigerator', 'StorageFurniture', 'Table', 'Vase'
     ]
-    metric_names = ['SQ', 'RQ', 'TS', 'TQ', 'mTQ']
+    metric_names = ['SQ', 'RQ', 'SS', 'TQ', 'mTQ', 'mR']
     # for step, result_path in enumerate(tqdm(all_results), 1):
     process_list = []
     que = Queue()

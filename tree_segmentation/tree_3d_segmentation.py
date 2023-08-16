@@ -1571,7 +1571,7 @@ class Tree3Dv2(TreeStructure):
         timer = utils.TimeWatcher()
         if weights is None:
             weights = {}
-        weights = {**dict(match=1, view=1, mv=1, recon=1, t2d=1, tree=1, vm=1), **weights}
+        weights = {**dict(match=1, view=1, mv=1, recon=1, t2d=1, tree=0.1, vm=1), **weights}
         print(f'loss weights: {weights}')
         with torch.enable_grad():
             for epoch in range(epochs):

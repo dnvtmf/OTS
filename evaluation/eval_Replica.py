@@ -247,6 +247,7 @@ def options():
     ## Tree2D options
     predictor_options(parser)
     utils.add_bool_option(parser, '--force-2d', help='Force run 2d tree segment rather than use cached')
+    utils.add_bool_option(parser, '--gt-2d', help='Use ground truth 2D segment')
     args = parser.parse_args()
     return args
 
@@ -299,7 +300,7 @@ def main():
     image_dir = cache_dir.joinpath('images')
     image_dir.mkdir(exist_ok=Tree)
     run_2d = args.force_2d or len(list(cache_dir.glob(f"view_*.data"))) < args.num_views
-    if args.force_view or run_2d:
+    if args.force_view or run_2d or args.gt_2d:
         if args.force_view or len(list(image_dir.glob('*.png'))) < args.num_views:
             images, tri_ids, Tw2vs = get_images_best_view(mesh, image_size=args.image_size, num_views=args.num_views)
 
@@ -315,10 +316,10 @@ def main():
 
         print(mesh.f_pos.shape, tri_ids.max())
         # 2D Segmentation
-        if run_2d:
+        if run_2d and not args.gt_2d:
             run_2d_segmentation(cache_dir, images, tri_ids, Tw2vs)
             console.print('[2D] GPU {0:.4f}/{1:.4f}'.format(*utils.get_GPU_memory()))
-        del images, tri_ids, Tw2vs
+        del images, Tw2vs
 
     # 3D Tree segmentation
     if args.filename is None:
@@ -329,7 +330,10 @@ def main():
     if not args.force_3d and save_path.exists():
         tree3d.load(save_path)
     else:
-        tree3d.load_2d_results(cache_dir, pack=True)
+        if args.gt_2d:
+            tree3d.load_2d_results(gt=gt, tri_ids=tri_ids, pack=True)
+        else:
+            tree3d.load_2d_results(cache_dir, pack=True)
         # save memory
         # view_mask = tree3d.masks_view.any(dim=0)
         # view_mask[0] = 1
@@ -393,7 +397,7 @@ def main():
             epochs=args.epochs,
             K=K,
             gnn=gnn,
-            A=A * A.ge(0.5),
+            A=A,
             X=X,
             weights=args.loss_weights,
             print=print,

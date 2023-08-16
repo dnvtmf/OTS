@@ -2,7 +2,7 @@
 
 scenes=(office_0  office_1  office_2  office_3  office_4  room_0  room_1  room_2)
 gpus=(0 1 2 3 0 1 2 3)
-args=(-ssl --stability_score_thresh=0.92 --points_per_batch=256)
+args=(-ssl --stability_score_thresh=0.92 --points_per_batch=256 --filename=n10000 -n=10000)
 output=./results/Replica_3
 
 num_gpus=${#gpus[@]}

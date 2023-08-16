@@ -21,13 +21,14 @@ class TreeSegmentMetric:
         self.SQ_sum = 0  # segmentation quality
         self.RQ_sum = 0  # recognition quality
         self.TQ_sum = 0  # tree quality
-        self.TS_sum = 0  # tree structure quality
+        self.SS_sum = 0  # structure score
         # self.mPQ_sum = 0  # panoptic quality
         # self.mSQ_sum = 0  # segmentation quality
         # self.mRQ_sum = 0  # recognition quality
         # self.mTQ_sum = 0  # tree quality
         # self.mTS_sum = 0  # tree structure quality
         self.maxIoU_sum = 0  # for each gt, choose the best IoU in prediction
+        self.mean_recall = 0
         self.is_resize_2d_as_gt = is_resize_2d_as_gt
 
     def pack(self):
@@ -36,8 +37,8 @@ class TreeSegmentMetric:
             'PQ_sum': self.PQ_sum,
             'SQ_sum': self.SQ_sum,
             'RQ_sum': self.RQ_sum,
+            'SS_sum': self.SS_sum,
             'TQ_sum': self.TQ_sum,
-            'TS_sum': self.TS_sum,
             'maxIoU_sum': self.maxIoU_sum,
         }
 
@@ -74,25 +75,30 @@ class TreeSegmentMetric:
         ## calc Tree Structure Score (TSS)
         # TSS = self.calc_tree_structure_score(prediction, indices_pd)
         # assert 0 <= TS.min() and TS.max() <= 1. + 1e-4, f"{TS.aminmax()}"
-        TSS = self.calc_tree_structure_score_2(prediction, indices_pd).item()
-        if not (0 <= TSS <= 1. + 1e-4):
-            print(f"TS not in [0, 1]: {TSS}")
-        self.TS_sum += TSS
+        SS = self.calc_tree_structure_score_2(prediction, indices_pd).item()
+        if not (0 <= SS <= 1. + 1e-4):
+            print(f"TS not in [0, 1]: {SS}")
+        self.SS_sum += SS
         ## find match
         ### 二分匹配
-        # IoU = IoU * (IoU >= self.iou_threshold)
-        # IoU = IoU.detach().cpu().numpy()
-        # pred_idx, gt_idx = linear_sum_assignment(1 - IoU)
-        # matched_iou = IoU[pred_idx, gt_idx]
-        # mask = matched_iou >= self.iou_threshold
-        # pred_idx, gt_idx, matched_iou = pred_idx[mask], gt_idx[mask], matched_iou[mask]
-        ### 分步匹配
-        matched_iou, matched = IoU.max(dim=1)  # find the largest IoU for each prediction
-        t = torch.zeros_like(IoU)
-        t[torch.arange(N, device=IoU.device), matched] = matched_iou
-        matched_iou, pred_idx = t.max(dim=0)  # find the largest IoU for each ground truth
+        IoU = IoU * (IoU >= self.iou_threshold)
+        IoU = IoU.detach().cpu().numpy()
+        pred_idx, gt_idx = linear_sum_assignment(1 - IoU)
+        matched_iou = IoU[pred_idx, gt_idx]
+        mr = 0
+        for t in range(50, 100, 5):
+            mr += (matched_iou >= (t / 100.)).sum() / M
+        self.mean_recall += mr / 10
+        
         mask = matched_iou >= self.iou_threshold
-        pred_idx, gt_idx, matched_iou = pred_idx[mask], torch.arange(M, device=IoU.device)[mask], matched_iou[mask]
+        pred_idx, gt_idx, matched_iou = pred_idx[mask], gt_idx[mask], matched_iou[mask]
+        ### 分步匹配
+        # matched_iou, matched = IoU.max(dim=1)  # find the largest IoU for each prediction
+        # t = torch.zeros_like(IoU)
+        # t[torch.arange(N, device=IoU.device), matched] = matched_iou
+        # matched_iou, pred_idx = t.max(dim=0)  # find the largest IoU for each ground truth
+        # mask = matched_iou >= self.iou_threshold
+        # pred_idx, gt_idx, matched_iou = pred_idx[mask], torch.arange(M, device=IoU.device)[mask], matched_iou[mask]
         ## calc SQ, RQ, PQ, TQ
         TP = len(pred_idx)
         FP = N - TP
@@ -102,7 +108,7 @@ class TreeSegmentMetric:
         self.SQ_sum += SQ
         self.RQ_sum += RQ
         self.PQ_sum += SQ * RQ
-        self.TQ_sum += SQ * RQ * TSS
+        self.TQ_sum += SQ * RQ * SS
 
         self.cnt += 1
 
@@ -338,8 +344,8 @@ class TreeSegmentMetric:
         return self.RQ_sum / self.cnt if self.cnt > 0 else math.nan
 
     @property
-    def TS(self):
-        return self.TS_sum / self.cnt if self.cnt > 0 else math.nan
+    def SS(self):
+        return self.SS_sum / self.cnt if self.cnt > 0 else math.nan
 
     @property
     def TQ(self):
@@ -366,6 +372,10 @@ class TreeSegmentMetric:
     #     return self.mTQ_sum / self.cnt if self.cnt > 0 else math.nan
 
     @property
+    def mR(self):
+        return self.mean_recall / self.cnt if self.cnt > 0 else math.nan
+
+    @property
     def mIoU(self):
         return self.maxIoU_sum / self.cnt if self.cnt > 0 else math.nan
 
@@ -374,7 +384,7 @@ class TreeSegmentMetric:
             'SQ': self.SQ,
             'RQ': self.RQ,
             'PQ': self.PQ,
-            'TS': self.TS,
+            'SS': self.SS,
             'TQ': self.TQ,
             # 'mSQ': self.mSQ,
             # 'mRQ': self.mRQ,
@@ -382,4 +392,5 @@ class TreeSegmentMetric:
             # 'mTS': self.mTS,
             # 'mTQ': self.mTQ,
             'mIoU': self.mIoU,
+            'mR': self.mR,
         }
