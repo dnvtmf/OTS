@@ -82,7 +82,7 @@ def main():
     N = len(eval_image_paths)
     print(f"Try To evaluate {N} image")
 
-    get_predictor(args, print=console.print)
+    get_predictor(args, print=console.print).timer = utils.TimeWatcher()
     device = torch.device('cuda')
 
     metric = TreeSegmentMetric(is_resize_2d_as_gt=False)
@@ -147,13 +147,21 @@ def main():
 
     console.print('Complete Evalution')
     console.print('Time:', time_avg)
+    timer_predictor = get_predictor().timer
+
+    print('Item', list(timer_predictor._total.keys()))
+    print('Sum ', [utils.time2str(x) for x in timer_predictor._total.values()])
+    print('Num ', list(timer_predictor._num.values()))
+    print('Avg ', [utils.time2str(x) for x in timer_predictor.average().values()])
+
     for k, v in metric.summarize().items():
         console.print(f"{k:5s}: {v}")
     console.print('average masks:', np.mean(num_masks))
     console.print('ignore rate:', ignore_rate / max(1, num_count))
 
-    now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
-    console.save_text(save_dir.joinpath(f"{args.log}_{now_date}.txt"))
+    if save_dir is not None:
+        now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
+        console.save_text(save_dir.joinpath(f"{args.log}_{now_date}.txt"))
 
 
 if __name__ == '__main__':

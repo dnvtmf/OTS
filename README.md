@@ -2,10 +2,6 @@
 
 Tree Segmentation for 3D
 
-## Overleaf
-
-https://www.overleaf.com/6945515643cnsqpwznzgsq
-
 ## Install
 
 ```shell
@@ -29,81 +25,10 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [Sematic-SAM](https://github.com/UX-Decoder/Semantic-SAM/tree/main)
 
 ## TODO
-
-- [x] [2D] add post propocess
-- [x] [3D] Tree3Dv2 to tree
-- [x] [3D] 添加tree loss
-
-### 8.3 work list 
-- [x] [2D] 修改metric, 在SA-1B上测试metric结果
-- [x] [3D] 修改3D loss, 增加有关G重建的loss
-
-### 8.4 work list
-- [x] [Paper] 撰写论文的方法部分
-
-### 8.5 work list
-- [ ] [2D] 完成2D的实验
-- [x] [2D] 基于SA-1B选取超参数
-- [ ] [3D] 快速2D分割
-- [ ] [Paper] 撰写实验部分
-### 8.6 work list
-- [x] [Paper] Introduction草稿
-- [x] [3D] PartNet选用实验划分
-- [x] [3D] 新的建图方式
-
-### 8.7 work list
-- [x] [2D] 完成2D对比实验 origin
-- [x] [3D] 完成loss改进
-- [ ] [3D] PartNet gt_seg
-
-### 8.8 work list
-- [x] [3D] PartNet gt_seg
-- [ ] [2D] 完成2D对比实验 origin_tree
-- [x] [2D] 完成2D对比实验 0.5
-- [ ] [3D] indoor dataset
-- [x] [3D] outdoor dataset
-- [x] [3D] 室外场景
-- [ ] [Paper] 撰写相关工作
-- [x] [3D] PartNet使用纹理
-
-### 8.9  
-- [x] [Paper] 撰写Introduction
-- [x] [2D] 完成2D对比实验 0
-- [x] [2D] 完成2D对比实验 1.0
-
-### 8.10 work list
-- [ ] [3D] 快速2D分割 (failed)
-- [x] [3D] view选择
-- [x] [Paper] 插图绘制
-- [ ] [3D] 测试样本筛选
-
-### 8.11 work list
-- [ ] [3D] 不同类型GNN测试
-- [x] [3D] 不同loss functions测试
-- [x] [Paper] 完成PartNet的插图绘制
-- [x] [Paper] 完成场景的插图绘制
-
-### 8.12 work list
-- [x] [3D] 不同K测试
-- [ ] [3D] 修改tree loss
-- [x] [3D] 完成Replica实验
-- [x] [Paper] 完成方法和实验部分撰写
-
-### 8.13 work list
-- [x] [Paper] 完成方法部分修改
-- [ ] [3D] PaperNet上测试所有2D结果的准确率
-- [ ] [3D] PaperNet上测试所有gt_seg的准确率
+- [ ] [3D] 只有一个mask的情况 
+- [ ] [3D] 改正match loss
 - [ ] [3D] Replica 选择视角
-- [x] [3D] PartNet在测试时去除不可见部分
-  
-### 8.14 work list
-- [ ] [Paper] 完成所有内容的初稿
-- [ ] [3D] 调整loss参数
-- [ ] [3D] 修改可能的bug
-
-### future
 - [ ] [3D] Replica 使用高清图片
-- [ ] [2D] 测试automatic mask generator的结果
 - [ ] [2D] metric set ignore nodes
 - [ ] [2D] run experiment on PASCAL VOC/Cityscapes
 - [ ] [3D] 基于边的融合方法

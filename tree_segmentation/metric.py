@@ -30,6 +30,8 @@ class TreeSegmentMetric:
         self.maxIoU_sum = 0  # for each gt, choose the best IoU in prediction
         self.mean_recall = 0
         self.is_resize_2d_as_gt = is_resize_2d_as_gt
+        self.total = 0  # The total number of predictions
+        self.num_gt = 0  # The total number of predictions
 
     def pack(self):
         return {
@@ -41,6 +43,8 @@ class TreeSegmentMetric:
             'TQ_sum': self.TQ_sum,
             'maxIoU_sum': self.maxIoU_sum,
             'mean_recall': self.mean_recall,
+            'total': self.total,
+            'num_gt': self.num_gt,
         }
 
     def add_pack(self, data: dict):
@@ -54,6 +58,8 @@ class TreeSegmentMetric:
                return_match=False):
         if gt.cnt == 0:
             return
+        self.num_gt += sum(len(x) for x in gt.get_levels()) - 1
+        self.total += sum(len(x) for x in prediction.get_levels()) - 1
         if prediction.cnt == 0:
             self.cnt += 1
             return
@@ -320,12 +326,12 @@ class TreeSegmentMetric:
         score = 0
         for i in indices:
             mask = p.masks[i]
-            if p.parent[i + 1] == 0:
-                conflict = torch.zeros_like(mask)
-            else:
-                conflict = torch.logical_and(mask, torch.logical_not(p.masks[p.parent[i + 1] - 1]))
-            for c in p.get_children(i + 1):
-                conflict = torch.logical_or(conflict, torch.logical_and(mask, p.masks[c - 1]))
+            parent = p.parent[i + 1].item()
+            conflict = torch.zeros_like(mask) if p.parent[i + 1] == 0 else torch.logical_not(p.masks[parent - 1])
+            for c in p.get_children(parent):
+                if c != i + 1:
+                    conflict = torch.logical_or(conflict, p.masks[c - 1])
+            conflict = torch.logical_and(conflict, mask)
             if hasattr(p, 'area'):
                 score += (conflict[1:] * p.area).sum() / (mask[1:] * p.area).sum().clamp_min(self.eps)
             else:
@@ -380,11 +386,14 @@ class TreeSegmentMetric:
     def mIoU(self):
         return self.maxIoU_sum / self.cnt if self.cnt > 0 else math.nan
 
+    @property
+    def num_samples(self):
+        return self.total / self.cnt if self.cnt > 0 else math.nan
+
     def summarize(self):
         return {
             'SQ': self.SQ,
             'RQ': self.RQ,
-            'PQ': self.PQ,
             'SS': self.SS,
             'TQ': self.TQ,
             # 'mSQ': self.mSQ,
@@ -392,6 +401,9 @@ class TreeSegmentMetric:
             # 'mPQ': self.mPQ,
             # 'mTS': self.mTS,
             # 'mTQ': self.mTQ,
+            'PQ': self.PQ,
             'mIoU': self.mIoU,
             'mR': self.mR,
+            'num': self.num_samples,
+            'num_gt': self.num_gt / max(1, self.cnt),
         }

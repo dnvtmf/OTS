@@ -1029,7 +1029,7 @@ class Tree3Dv2(TreeStructure):
         return A
 
     @torch.enable_grad()
-    def compress_masks(self, hidden_dims=(256, 256, 256), epochs=10000, batch_size=64, lr=1e-3, include_views=True):
+    def compress_masks(self, hidden_dims=(256, 256, 256), epochs=3000, batch_size=64, lr=1e-3, include_views=True):
         autoencoder = AutoEncoder(self.num_faces, hidden_dims).to(self.device)
         metric = ext.DictMeter()
         opt = torch.optim.Adam(autoencoder.parameters(), lr=lr)

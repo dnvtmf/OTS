@@ -55,6 +55,7 @@ class TreePredictor:
         point_grids: Optional[List[np.ndarray]] = None,
         min_mask_region_area: int = 0,
         output_mode: str = "binary_mask",
+        timer=None,
     ) -> None:
         """
         Using a SAM model, generates masks for the entire image.
@@ -145,6 +146,7 @@ class TreePredictor:
         self.crop_n_points_downscale_factor = crop_n_points_downscale_factor
         self.min_mask_region_area = min_mask_region_area
         self.output_mode = output_mode
+        self.timer = timer  # type: Optional[TimeWatcher]
 
     @torch.no_grad()
     def tree_generate(self,
@@ -160,21 +162,16 @@ class TreePredictor:
                       sample_limit_fn=None,
                       device=None,
                       verbose=0,
-                      timer: TimeWatcher = None,
                       compress=True,
-                      tree2d: Tree2D = None) -> Tree2D: 
+                      tree2d: Tree2D = None) -> Tree2D:
         assert image.shape[-1] == 3
-        if timer is not None:
-            timer.start()
+        if self.timer is not None:
+            self.timer.start()
         self.set_image(image)
-        if timer is not None:
-            timer.log('feature')
         init_points = build_point_grid(points_per_side)
-        if timer is not None:
-            timer.log('points')
+        if self.timer is not None:
+            self.timer.log('sample')
         data = self.process_points(init_points)
-        if timer is not None:
-            timer.log('decode', len(init_points))
 
         num_masks = len(data['masks'])
         if tree2d is None:
@@ -191,8 +188,8 @@ class TreePredictor:
         else:
             num_ignored = tree2d.insert_batch(data)
         tree2d.remove_not_in_tree()
-        if timer is not None:
-            timer.log('tree', len(init_points))
+        if self.timer is not None:
+            self.timer.log('tree', n=num_masks)
         if verbose > 0:
             print('[Tree2D] complete init segmentation')
         del data
@@ -201,25 +198,24 @@ class TreePredictor:
             points = tree2d.sample_by_counts(points_per_update, sample_limit_fn, ratio=ratio)
             if points is None or points.size == 0:
                 break
-            if timer is not None:
-                timer.log('points')
+            if self.timer is not None:
+                self.timer.log('sample')
             data = self.process_points(points)
-            if timer is not None:
-                timer.log('decode', len(points))
+            num_masks_ = len(data['masks'])
             num_masks += len(data['masks'])
             num_ignored += tree2d.insert_batch(data)
             del data
             # tree_data.update_tree()
             tree2d.remove_not_in_tree()
             # tree_data.update_tree()
-            if timer is not None:
-                timer.log('tree', len(points))
+            if self.timer is not None:
+                self.timer.log('tree', n=num_masks_)
             if verbose > 0:
                 print(f'[Tree2D] complete step {step} update segmentation')
         self.reset_image()
         tree2d.post_process(compress=compress)
-        if timer is not None:
-            timer.log('post')
+        if self.timer is not None:
+            self.timer.log('post')
         if verbose > 0:
             print(f"[Tree2D] ignore {num_ignored}/{num_masks} masks during generate")
         tree2d.ignore_rate = num_ignored / num_masks
@@ -244,6 +240,8 @@ class TreePredictor:
             torch.zeros_like(data["boxes"][:, 0]),  # categories
             iou_threshold=self.box_nms_thresh)
         data.filter(keep_by_nms)
+        if self.timer is not None:
+            self.timer.log('filter', n=len(points))
         return data
 
     @torch.no_grad()
@@ -394,6 +392,8 @@ class TreePredictor:
         in_labels = torch.ones(in_points.shape[0], dtype=torch.int, device=in_points.device)
         masks, iou_preds, _ = self.predict_torch(
             in_points[:, None, :], in_labels[:, None], multimask_output=True, return_logits=True)
+        if self.timer is not None:
+            self.timer.log('predict', n=in_points.shape[0])
 
         # Serialize predictions and store in MaskData
         data = MaskData(
@@ -504,6 +504,8 @@ class TreePredictor:
         input_image_torch = input_image_torch.permute(2, 0, 1).contiguous()[None, :, :, :]
 
         self.set_torch_image(input_image_torch, image.shape[:2])
+        if self.timer is not None:
+            self.timer.log('image')
 
     @torch.no_grad()
     def set_torch_image(self, transformed_image: torch.Tensor, original_image_size: Tuple[int, ...]) -> None:

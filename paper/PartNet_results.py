@@ -16,20 +16,6 @@ from multiprocessing import Process, Queue, set_start_method
 data_root = Path('~/data/PartNet/data_v0').expanduser()
 
 
-def to_tuple(m: TreeSegmentMetric):
-    return (m.SQ_sum, m.RQ_sum, m.PQ_sum, m.SS_sum, m.TQ_sum, m.maxIoU_sum, m.cnt)
-
-
-def add_from_tuple(m: TreeSegmentMetric, data):
-    m.SQ_sum += data[0]
-    m.RQ_sum += data[1]
-    m.PQ_sum += data[2]
-    m.SS_sum += data[3]
-    m.TQ_sum += data[4]
-    m.maxIoU_sum += data[5]
-    m.cnt += data[6]
-
-
 def eval_one(que: Queue, result_path: Path, device, glctx, eval_2d=False):
     obj_id = result_path.parts[-2]
     # print(result_path, obj_id)
@@ -74,16 +60,16 @@ def eval_one(que: Queue, result_path: Path, device, glctx, eval_2d=False):
                 continue
             tree2d_gt = gt.get_2d_tree(tri_ids[view_id])
 
-            # tree2d_pd = Tree2D(device=device)
-            # pth = torch.load(tree2d_path, map_location=device)
-            # # print(utils.show_shape(pth))
-            # tree2d_pd.load(None, **pth['tree_data'])
-            # tree2d_pd.remove_background(tri_ids[view_id].eq(0))
-            # tree2d_pd.post_process()
-            # tree2d_pd.remove_not_in_tree()
-            # assert tree2d_pd.parent.lt(0).any()
-            # assert tree2d_gt.parent.lt(0).any()
-            # m2d.update(tree2d_pd, tree2d_gt)
+            tree2d_pd = Tree2D(device=device)
+            pth = torch.load(tree2d_path, map_location=device)
+            # print(utils.show_shape(pth))
+            tree2d_pd.load(None, **pth['tree_data'])
+            tree2d_pd.remove_background(tri_ids[view_id].eq(0))
+            tree2d_pd.post_process()
+            tree2d_pd.remove_not_in_tree()
+            assert tree2d_pd.parent.lt(0).any()
+            assert tree2d_gt.parent.lt(0).any()
+            m2d.update(tree2d_pd, tree2d_gt)
 
             tree2d_p = prediction.get_2d_tree(tri_ids[view_id])
             mp.update(tree2d_p, tree2d_gt)
@@ -94,7 +80,7 @@ def eval_one(que: Queue, result_path: Path, device, glctx, eval_2d=False):
         gt_seg.load(gt_seg_path)
         g2d.update(gt_seg, gt)
 
-    que.put((cat, to_tuple(m2d), to_tuple(m3d), to_tuple(mp), to_tuple(g2d)))
+    que.put((cat, m2d.pack(), m3d.pack(), mp.pack(), g2d.pack()))
 
 
 def eval_many(que: Queue, result_paths: List[Path], gpu_id):
@@ -118,7 +104,7 @@ def main():
     # cache_root = Path('~/wan_code/segmentation/tree_segmentation/results').expanduser()
     print(f"Data Root: {data_root}")
 
-    save_root = Path('/data5/wan/PartNet_final/').expanduser()
+    save_root = Path('~/data/results/cache/PartNet/').expanduser()
     print(f"Save Root:", save_root)
     all_results = sorted(list(save_root.glob('*/my.tree3dv2')))
     print(f'There are {len(all_results)} results')
@@ -152,16 +138,10 @@ def main():
         metrics_p[cat] = TreeSegmentMetric()
         metrics_gs[cat] = TreeSegmentMetric()
 
-    # show_cats = ['Bag', 'Bed', 'Bottle', 'Bowl', 'Chair', 'Clock', 'Dishwasher', 'Display', 'Door', 'Earphone', 'Faucet', 'Hat', 'Keyboard', 'Knife', 'Lamp', 'Laptop', 'Microwave', 'Mug', 'Refrigerator', 'Scissors', 'StorageFurniture', 'Table', 'TrashCan', 'Vase']
-    show_cats = [
-        'Bed', 'Chair', 'Clock', 'Dishwasher', 'Display', 'Door', 'Earphone', 'Faucet', 'Knife', 'Lamp', 'Microwave',
-        'Refrigerator', 'StorageFurniture', 'Table', 'Vase'
-    ]
-    metric_names = ['SQ', 'RQ', 'SS', 'TQ', 'mTQ', 'mR']
     # for step, result_path in enumerate(tqdm(all_results), 1):
     process_list = []
     que = Queue()
-    num_gpus = 4
+    num_gpus = 10
     N = len(all_results)
     for i in range(num_gpus):
         p = Process(target=eval_many, args=(que, all_results[i * N // num_gpus:(i + 1) * N // num_gpus], i))
@@ -169,14 +149,15 @@ def main():
         process_list.append(p)
     for step in tqdm(range(N)):
         cat, m2d_data, m3d_data, mp_data, gs_data = que.get(timeout=3600)
-        add_from_tuple(metrics_2d['all'], m2d_data)
-        add_from_tuple(metrics_2d[cat], m2d_data)
-        add_from_tuple(metrics_3d['all'], m3d_data)
-        add_from_tuple(metrics_3d[cat], m3d_data)
-        add_from_tuple(metrics_p['all'], mp_data)
-        add_from_tuple(metrics_p[cat], mp_data)
-        add_from_tuple(metrics_gs['all'], gs_data)
-        add_from_tuple(metrics_gs[cat], gs_data)
+        metrics_2d
+        metrics_2d['all'].add_pack(m2d_data)
+        metrics_2d[cat].add_pack(m2d_data)
+        metrics_3d['all'].add_pack(m3d_data)
+        metrics_3d[cat].add_pack(m3d_data)
+        metrics_p['all'].add_pack(mp_data)
+        metrics_p[cat].add_pack(mp_data)
+        metrics_gs['all'].add_pack(gs_data)
+        metrics_gs[cat].add_pack(gs_data)
 
         print(f'Complete {step+1}/{len(all_results)}')
         print(f'3D, {", ".join([f"{k}={v:.4f}" for k, v in metrics_3d["all"].summarize().items()])}')
@@ -193,6 +174,8 @@ def main():
                     f.write(f'2D, {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
                 for k, v in metrics_p.items():
                     f.write(f'P , {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
+                for k, v in metrics_gs.items():
+                    f.write(f'GS, {k}, {", ".join([f"{x:.4f}" for x in v.summarize().values()])}\n')
                 # f.write(
                 #     f"num: {metrics_3d['all'].cnt}, {metrics_2d['all'].cnt}, {metrics_p['all'].cnt}, {metrics_gs['all'].cnt}\n"
                 # )

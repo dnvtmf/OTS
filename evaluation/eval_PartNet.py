@@ -162,24 +162,27 @@ def get_images(glctx, mesh: Mesh, image_size=256, num_views=1, num_split=10, see
     return images.cpu(), tri_ids.cpu(), Tw2vs.cpu()
 
 
-def load_images(glctx, mesh: Mesh, image_dir: Path, num_views=1, fovy=60):
+def load_images(glctx, mesh: Mesh, image_dir: Path, num_views=1, fovy=60, num_split=64):
     device = mesh.v_pos.device
     Tw2vs = torch.load(image_dir.joinpath("Tw2v.pth"), map_location=device)[:num_views]
     images = []
     for i in range(num_views):
-        # if colored:
-        image = utils.load_image(image_dir.joinpath(f"{i:03d}.png"))  # type: np.ndarray
-        # else:
-        #     image = utils.load_image(image_dir.joinpath(f"{i:03d}_g.png"))  # type: np.ndarray
+        filename_fmt = '{:0%dd}.png' % len(str(num_views))
+        image = utils.load_image(image_dir.joinpath(filename_fmt.format(i)))  # type: np.ndarray
         image = torch.from_numpy(image.copy()).float() / 255.
         images.append(image)
     images = torch.stack(images)  #NxHxWx3
     image_size = (images.shape[2], images.shape[1])  # W, H
     Tv2c = ops_3d.perspective(fovy=math.radians(fovy), size=image_size, device=device)
     Tw2c = Tv2c @ Tw2vs.to(device)
-    v_pos = ops_3d.xfm(mesh.v_pos, Tw2c)
-    rast, _ = dr.rasterize(glctx, v_pos.to(device), mesh.f_pos.int().to(device), image_size)
-    return images, rast[..., -1].int().to(device), Tw2vs
+    tri_ids = []
+    for s in range(0, Tw2c.shape[0], num_split):
+        e = min(Tw2c.shape[0], s + num_split)
+        v_pos = ops_3d.xfm(mesh.v_pos, Tw2c[s:e])
+        rast, _ = dr.rasterize(glctx, v_pos.to(device), mesh.f_pos.int().to(device), image_size)
+        tri_ids.append(rast[..., -1].int().to(device))
+    tri_ids = torch.cat(tri_ids, dim=0)
+    return images, tri_ids, Tw2vs
 
 
 def run_2d_segmentation(cache_dir: Path, images: Tensor, tri_ids: Tensor, Tw2vs: Tensor):
@@ -386,7 +389,9 @@ def eval_one(
         else:
             X, _ = tree3d.compress_masks(epochs=epochs_ea)
             torch.save(X, X_file)
-        K = int(tree3d.Lmax * args.K_ratio)
+        if args.no_X:
+            X = X.new_ones((X.shape[0], 1))
+        K = int(tree3d.Lmax * args.K_ratio) if args.K_ratio > 0 else gt.cnt
         gnn_type = args.gnn.upper()
         if gnn_type == 'NONE':
             gnn = None
@@ -530,6 +535,7 @@ def options():
     utils.add_bool_option(parser, '--force-view', help='Force run view generateiong rather than use cached')
     utils.add_bool_option(parser, '--random-views', default=False, help='Random generate views')
     # utils.add_bool_option(parser, '--colored', default=False, help='The colored images')
+    utils.add_bool_option(parser, '--no-X', default=False)
 
     utils.add_cfg_option(parser, '--loss-weights', default={}, help='The weigths of loss')
     predictor_options(parser)
