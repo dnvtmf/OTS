@@ -85,15 +85,15 @@ class TreeSegmentGUI(TreeSegment):
             self.view_2d = ImageViewer(size=(512, 512), tag='image_sample', pos=(512, 0), no_resize=True, no_move=True)
             self.view_seg = ImageViewer(size=(512, 512), tag='image_seg', pos=(512, 512), no_resize=True, no_move=True)
             with dpg.window(
-                    label='control',
-                    tag='control',
-                    width=512,
-                    height=512 - 30,
-                    pos=(0, 512),
-                    no_close=True,
-                    no_resize=True,
-                    no_move=True,
-                    # no_title_bar=True,
+                label='control',
+                tag='control',
+                width=512,
+                height=512 - 30,
+                pos=(0, 512),
+                no_close=True,
+                no_resize=True,
+                no_move=True,
+                # no_title_bar=True,
             ):
                 # self.add_menu_bar()
                 self.make_control_panel()
@@ -425,7 +425,6 @@ class TreeSegmentGUI(TreeSegment):
             return default
 
     def _set_value(self, name, value):
-
         def setter(*args):
             return setattr(self, name, value)
 
@@ -439,7 +438,6 @@ class TreeSegmentGUI(TreeSegment):
         return wrapper
 
     def _cbw2(self, cls, func, *args, update_3d=False, **kwargs):
-
         def wrapper():
             if isinstance(func, str):
                 res = getattr(cls, func)(*args, **kwargs)
@@ -654,10 +652,8 @@ class TreeSegmentGUI(TreeSegment):
             background = torch.logical_not(self.aux_data_2d[0][0])
             masks = torch.stack([background] + [self.aux_data_2d[x.item()][0] for x in indices])
             # print('masks:', utils.show_shape(masks))
-            self.tree2d.reset(
-                MaskData(
-                    masks=masks.to(self.tree2d.device),
-                    iou_preds=torch.zeros(masks.shape[0], device=self.tree2d.device)))
+            self.tree2d.clear(masks=masks.to(self.tree2d.device),
+                scores=torch.zeros(masks.shape[0], device=self.tree2d.device))
             # self.tree_data.update_tree()
             # print(utils.show_shape(self.tree_data.data, self.tree_data.parent))
             # print(indices)
@@ -985,7 +981,6 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_button(label=self._model_type, tag='change_model', height=30)
 
             def change_model(name='SAM'):
-
                 def change(*args):
                     if self._model_type != name:
                         self._predictor = None
@@ -1099,7 +1094,6 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_slider_float(min_value=0, max_value=1., default_value=0.5, tag='alpha', callback=self.update_viewer)
 
         def changed_callback(item):
-
             def changed(*args):
                 if self._predictor is not None:
                     setattr(self._predictor, item, dpg.get_value(item))
@@ -1113,13 +1107,13 @@ class TreeSegmentGUI(TreeSegment):
 
     def make_edit_2d_options(self):
         with dpg.file_dialog(
-                directory_selector=False,
-                show=False,
-                callback=self.change_image,
-                id="choose_image",
-                width=700,
-                height=400,
-                default_path=self.image_dir.as_posix(),
+            directory_selector=False,
+            show=False,
+            callback=self.change_image,
+            id="choose_image",
+            width=700,
+            height=400,
+            default_path=self.image_dir.as_posix(),
         ):
             dpg.add_file_extension("Image{.png,.jpg,.jpeg,.tif}", custom_text='[Image]')
         with dpg.group(horizontal=True):
@@ -1173,20 +1167,19 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_button(width=W, height=H, label='AutoRun', callback=self.autorun_tree_seg_2d)
 
     def make_3d_tree_segmentation_options(self):
-
         def update_view_3d(*args):
             self.view_3d.need_update = True
             # print('need update view3d')
 
         with dpg.file_dialog(
-                # directory_selector=False,
-                show=False,
-                callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
-                id="choose_mesh",
-                width=700,
-                height=400,
-                default_path='/home/wan/data/meshes',
-                modal=True,
+            # directory_selector=False,
+            show=False,
+            callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
+            id="choose_mesh",
+            width=700,
+            height=400,
+            default_path='/home/wan/data/meshes',
+            modal=True,
         ):
             dpg.add_file_extension("Mesh{.obj,.ply}", custom_text='mesh')
             with dpg.group(horizontal=True):
@@ -1372,7 +1365,6 @@ class TreeSegmentGUI(TreeSegment):
         pad = 10
 
         def show_level_callback(level):
-
             def show_level():
                 self.now_level_3d = level
                 return
@@ -1524,7 +1516,6 @@ class TreeSegmentGUI(TreeSegment):
         dpg.set_item_pos('load_popup', dpg.get_item_pos('control'))
 
         def _load(load_path: Path):
-
             def __load():
                 if self.mode == 'E2D':
                     self.reset_2d()

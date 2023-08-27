@@ -315,7 +315,7 @@ class Tree2D(TreeStructure):
         if self._masks is None:
             assert M == 1 and len(self.scores) == N - 1
         else:
-            assert len(self.scores) == N - 1 and len(self._masks) == N - 1, f"{len(self.scores)} != {N-1}"
+            assert len(self.scores) == N - 1 and len(self._masks) == N - 1, f"{len(self.scores)} != {N - 1}"
         assert self.cnt <= N, f"cnt={self.cnt} > N={N}"
         return N, M
 
@@ -618,42 +618,6 @@ class Tree2D(TreeStructure):
             return
         self.node_rearrange()
         self.resize(self.cnt + 1)
-
-    def _dillate(self):
-        """腐蚀边界, 直至无空隙"""
-        raise NotImplementedError
-
-    def _output(self, output_mode='binary_mask'):
-        assert output_mode in ["binary_mask", "uncompressed_rle", "coco_rle"], f"Unknown output_mode {output_mode}."
-        # Compress to RLE
-        # data["masks"] = uncrop_masks(data["masks"], crop_box, orig_h, orig_w)
-        # data["rles"] = mask_to_rle_pytorch(data["masks"])
-        # del data["masks"]
-        # Encode masks
-        if output_mode == "coco_rle":
-            self.data["segmentations"] = [coco_encode_rle(rle) for rle in self.data["rles"]]
-        elif output_mode == "binary_mask":
-            self.data["segmentations"] = [rle_to_mask(rle) for rle in self.data["rles"]]
-        else:
-            self.data["segmentations"] = self.data["rles"]
-
-        # Write mask records
-        curr_anns = []
-        for idx in range(len(self.data["segmentations"])):
-            ann = {
-                "segmentation": self.data["segmentations"][idx],
-                "area": area_from_rle(self.data["rles"][idx]),
-                # "bbox": box_xyxy_to_xywh(self.data["boxes"][idx]).tolist(),
-                "predicted_iou": self.data["iou_preds"][idx].item(),
-                # "point_coords": [self.data["points"][idx].tolist()],
-                # "stability_score": self.data["stability_score"][idx].item(),
-                # "crop_box": box_xyxy_to_xywh(self.data["crop_boxes"][idx]).tolist(),
-                # TODO: include tree results
-            }
-            curr_anns.append(ann)
-
-        # return curr_anns
-        raise NotImplementedError
 
     def save(self, filename, compress=True, **kwargs):
         data = {

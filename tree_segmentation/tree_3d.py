@@ -11,7 +11,7 @@ import xatlas
 
 from tree_segmentation.extension import Mesh, utils
 from tree_segmentation.extension import ops_3d
-from semantic_sam import SemanticSAM, semantic_sam_l
+from semantic_sam import SemanticSAM, semantic_sam_l, semantic_sam_t
 import tree_segmentation as tree_segmentation
 from segment_anything.build_sam import Sam, build_sam
 from tree_segmentation import MaskData, Tree2D, TreePredictor, Tree3D
@@ -70,7 +70,7 @@ class TreeSegment:
         elif self._model_type == 'Semantic-SAM-L':
             self._model = semantic_sam_l(self.get_value('semantic_sam_l_path')).to(self.device)
         elif self._model_type == 'Semantic-SAM-T':
-            self._model = semantic_sam_l(self.get_value('semantic_sam_t_path')).to(self.device)
+            self._model = semantic_sam_t(self.get_value('semantic_sam_t_path')).to(self.device)
         print(f'Loaded Model: {self._model_type}')
 
     @property
@@ -119,7 +119,7 @@ class TreeSegment:
                 in_thres_area=self.get_value('in_area_threshold'),
                 union_threshold=self.get_value('union_threshold'),
                 min_area=self.get_value('min_area'))
-        if self._tree_2d.data is None and self.tri_id is not None:
+        if self._tree_2d.masks is None and self.tri_id is not None:
             background = self.tri_id.eq(0)
             foreground = torch.logical_not(background)
             mask_data = MaskData(
@@ -355,8 +355,8 @@ class TreeSegment:
             self._predictor.reset_image()
 
     def merge_to_3d(self, *, save=None):
-        if self.mask_data is not None and self.tree2d.data is not None:
-            self.tree3d.update(self.tree2d.data, self.aux_data_2d)
+        if self.mask_data is not None and self.tree2d.masks is not None:
+            self.tree3d.update(self.tree2d.masks, self.aux_data_2d)
             if save is None:
                 save = self.get_value('save_tree_data')
             if save:
@@ -456,7 +456,7 @@ class TreeSegment:
                 adj_nodes[self.mesh.f_pos[adj_faces]] = 1
             adj_faces = torch.nonzero(adj_nodes[self.mesh.f_pos].any(dim=-1)).squeeze()
             _, f_pos, v_pos = xatlas.parametrize(self.mesh.v_pos.cpu().numpy(),
-                                                 self.mesh.f_pos[adj_faces].cpu().numpy())
+                self.mesh.f_pos[adj_faces].cpu().numpy())
         else:
             adj_faces = None
             _, f_pos, v_pos = xatlas.parametrize(self.mesh.v_pos.cpu().numpy(), self.mesh.f_pos.cpu().numpy())
@@ -511,7 +511,6 @@ def main():
     segment.run_tree_3d_cycle()
     segment.run_tree_3d_uniform()
     segment.run_tree_3d_load()
-
 
 # 概率图模型
 ## 理论框架

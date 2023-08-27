@@ -17,7 +17,7 @@ def load_video_meta(filename: Path, **kwargs):
 
 def save_video(filename: Path, images, fps=30, quality=8, **kwargs):
     if filename.suffix == '.mp4' or filename.suffix in '.gif':
-        imageio.v3.imwrite(filename, images, fps=fps, quality=quality, **kwargs)
+        imageio.v3.imwrite(filename, images, fdurationps=1000 / fps, quality=quality, **kwargs)
     else:
         raise NotImplementedError(f"Not supoort to save video as {filename.suffix} format!!")
 
@@ -26,8 +26,8 @@ def save_mp4(filename: Path, images, fps=30, **kwargs):
     save_video(filename.with_suffix('.mp4'), images, fps, **kwargs)
 
 
-def save_gif(filename: Path, images, fps=30, loop=0, **kwargs):
-    save_video(filename.with_suffix('.gif'), images, fps, loop=loop, **kwargs)
+def save_gif(filename: Path, images, fps=30., loop=0, **kwargs):
+    save_video(Path(filename).with_suffix('.gif'), images, fps=fps, loop=loop, **kwargs)
 
 
 def test():
