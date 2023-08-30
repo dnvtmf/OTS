@@ -115,8 +115,8 @@ class TreePredictor:
             raise ValueError(f"The model must be SAM or SemanticSAM, not {type(model)}")
 
         self.reset_image()
-        assert (points_per_side is None) != (point_grids is
-                                             None), "Exactly one of points_per_side or point_grid must be provided."
+        assert (points_per_side is None) != (point_grids
+                                             is None), "Exactly one of points_per_side or point_grid must be provided."
         if points_per_side is not None:
             self.point_grids = build_all_layer_point_grids(
                 points_per_side,
@@ -550,7 +550,8 @@ class TreePredictor:
         mask_input: Optional[np.ndarray] = None,
         multimask_output: bool = True,
         return_logits: bool = False,
-    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+        return_numpy: bool = True,
+    ) -> Union[Tuple[np.ndarray, np.ndarray, np.ndarray], Tuple[Tensor, Tensor, Tensor]]:
         """
         Predict masks for the given input prompts, using the currently set image.
 
@@ -560,25 +561,21 @@ class TreePredictor:
             point prompts. 1 indicates a foreground point and 0 indicates a background point.
           box (np.ndarray or None): A length 4 array given a box prompt to the model, in XYXY format.
           mask_input (np.ndarray): A low resolution mask input to the model, typically
-            coming from a previous prediction iteration. Has form 1xHxW, where
-            for SAM, H=W=256.
+            coming from a previous prediction iteration. Has form 1xHxW, where for SAM, H=W=256.
           multimask_output (bool): If true, the model will return three masks.
             For ambiguous input prompts (such as a single click), this will often
             produce better masks than a single prediction. If only a single
             mask is needed, the model's predicted quality score can be used
             to select the best mask. For non-ambiguous prompts, such as multiple
             input prompts, multimask_output=False can give better results.
-          return_logits (bool): If true, returns un-thresholded masks logits
-            instead of a binary mask.
+          return_logits (bool): If true, returns un-thresholded masks logits instead of a binary mask.
 
         Returns:
-          (np.ndarray): The output masks in CxHxW format, where C is the
-            number of masks, and (H, W) is the original image size.
-          (np.ndarray): An array of length C containing the model's
-            predictions for the quality of each mask.
-          (np.ndarray): An array of shape CxHxW, where C is the number
-            of masks and H=W=256. These low resolution logits can be passed to
-            a subsequent iteration as mask input.
+          (np.ndarray): The output masks in CxHxW format, where C is the number of masks, 
+            and (H, W) is the original image size.
+          (np.ndarray): An array of length C containing the model's predictions for the quality of each mask.
+          (np.ndarray): An array of shape CxHxW, where C is the number of masks and H=W=256. 
+            These low resolution logits can be passed to a subsequent iteration as mask input.
         """
         if not self.is_image_set:
             raise RuntimeError("An image must be set with .set_image(...) before mask prediction.")
@@ -608,10 +605,13 @@ class TreePredictor:
             return_logits=return_logits,
         )
 
-        masks_np = masks[0].detach().cpu().numpy()
-        iou_predictions_np = iou_predictions[0].detach().cpu().numpy()
-        low_res_masks_np = low_res_masks[0].detach().cpu().numpy()
-        return masks_np, iou_predictions_np, low_res_masks_np
+        if return_numpy:
+            masks_np = masks[0].detach().cpu().numpy()
+            iou_predictions_np = iou_predictions[0].detach().cpu().numpy()
+            low_res_masks_np = low_res_masks[0].detach().cpu().numpy()
+            return masks_np, iou_predictions_np, low_res_masks_np
+        else:
+            return masks[0], iou_predictions[0], low_res_masks[0]
 
     @torch.no_grad()
     def predict_torch(
@@ -635,25 +635,21 @@ class TreePredictor:
             1 indicates a foreground point and 0 indicates a background point.
           boxes (np.ndarray or None): A Bx4 array given a box prompt to the model, in XYXY format.
           mask_input (np.ndarray): A low resolution mask input to the model, typically
-            coming from a previous prediction iteration. Has form Bx1xHxW, where
-            for SAM, H=W=256. Masks returned by a previous iteration of the
-            predict method do not need further transformation.
+            coming from a previous prediction iteration. Has form Bx1xHxW, where for SAM, H=W=256. 
+            Masks returned by a previous iteration of the predict method do not need further transformation.
           multimask_output (bool): If true, the model will return three masks.
-            For ambiguous input prompts (such as a single click), this will often
-            produce better masks than a single prediction. If only a single
-            mask is needed, the model's predicted quality score can be used
-            to select the best mask. For non-ambiguous prompts, such as multiple
-            input prompts, multimask_output=False can give better results.
+            For ambiguous input prompts (such as a single click), this will often produce better masks than a single 
+            prediction. If only a single mask is needed, the model's predicted quality score can be used to select the
+            best mask. For non-ambiguous prompts, such as multiple input prompts, multimask_output=False can give
+            better results.
           return_logits (bool): If true, returns un-thresholded masks logits instead of a binary mask.
 
         Returns:
           (torch.Tensor): The output masks in BxCxHxW format, where C is the number of masks,
             and (H, W) is the original image size.
-          (torch.Tensor): An array of shape BxC containing the model's
-            predictions for the quality of each mask.
-          (torch.Tensor): An array of shape BxCxHxW, where C is the number
-            of masks and H=W=256. These low res logits can be passed to
-            a subsequent iteration as mask input.
+          (torch.Tensor): An array of shape BxC containing the model's predictions for the quality of each mask.
+          (torch.Tensor): An array of shape BxCxHxW, where C is the number of masks and H=W=256. 
+            These low res logits can be passed to a subsequent iteration as mask input.
         """
         if not self.is_image_set:
             raise RuntimeError("An image must be set with .set_image(...) before mask prediction.")

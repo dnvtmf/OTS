@@ -13,7 +13,7 @@ from tree_segmentation.extension import Mesh, utils
 from tree_segmentation.extension import ops_3d
 from semantic_sam import SemanticSAM, semantic_sam_l, semantic_sam_t
 import tree_segmentation as tree_segmentation
-from segment_anything.build_sam import Sam, build_sam
+from segment_anything.build_sam import Sam, build_sam, build_sam_vit_b, build_sam_vit_l
 from tree_segmentation import MaskData, Tree2D, TreePredictor, Tree3D
 from tree_segmentation.render import render_mesh
 from tree_segmentation.util import get_hash_name
@@ -42,6 +42,7 @@ class TreeSegment:
         self._2d_aux_data: Optional[Dict[Union[int, str], Tensor]] = None
         self._image: Optional[np.ndarray] = None
         self._points: Optional[np.ndarray] = None
+        self._labels: Optional[np.ndarray] = None  # point labels
         self.tri_id: Optional[Tensor] = None
         self.Tw2v: Optional[Tensor] = None
         self._mask_data: Optional[MaskData] = None  # The results of one sample
@@ -67,6 +68,10 @@ class TreeSegment:
         if self._model_type == 'SAM':
             self._model = build_sam(self.get_value('sam_path')).to(self.device)
             # predictor = SamPredictor(sam)
+        elif self._model_type == 'SAM-L':
+            self._model = build_sam_vit_l(self.get_value('sam_l_path')).to(self.device)
+        elif self._model_type == 'SAM-B':
+            self._model = build_sam_vit_b(self.get_value('sam_b_path')).to(self.device)
         elif self._model_type == 'Semantic-SAM-L':
             self._model = semantic_sam_l(self.get_value('semantic_sam_l_path')).to(self.device)
         elif self._model_type == 'Semantic-SAM-T':
@@ -456,7 +461,7 @@ class TreeSegment:
                 adj_nodes[self.mesh.f_pos[adj_faces]] = 1
             adj_faces = torch.nonzero(adj_nodes[self.mesh.f_pos].any(dim=-1)).squeeze()
             _, f_pos, v_pos = xatlas.parametrize(self.mesh.v_pos.cpu().numpy(),
-                self.mesh.f_pos[adj_faces].cpu().numpy())
+                                                 self.mesh.f_pos[adj_faces].cpu().numpy())
         else:
             adj_faces = None
             _, f_pos, v_pos = xatlas.parametrize(self.mesh.v_pos.cpu().numpy(), self.mesh.f_pos.cpu().numpy())
@@ -511,6 +516,7 @@ def main():
     segment.run_tree_3d_cycle()
     segment.run_tree_3d_uniform()
     segment.run_tree_3d_load()
+
 
 # 概率图模型
 ## 理论框架

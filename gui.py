@@ -49,9 +49,10 @@ class TreeSegmentGUI(TreeSegment):
 
     def __init__(self, model=None) -> None:
         super().__init__(None, model=model)
-        self._mode = 'S3D'
+        self._mode = 'E2D'
+        self._edit = False
         self._mesh_history = []  # The path of last 10 loaded meshes
-        self.image_dir = Path('~/Pictures').expanduser()
+        self.image_dir = Path('./images').expanduser()
         self.image_index = 0
         self.image_paths = []
         self._need_update_2d = False
@@ -65,7 +66,8 @@ class TreeSegmentGUI(TreeSegment):
         self._now_level_3d = 0
         self.last_time = time()
         self._loading_mesh = False
-        self._choose_mask = None
+        self._choose_mask = 0
+        self._edit_mask_idx = 0
 
         with dpg.theme() as self.choose_theme:
             with dpg.theme_component(dpg.mvAll):
@@ -85,15 +87,15 @@ class TreeSegmentGUI(TreeSegment):
             self.view_2d = ImageViewer(size=(512, 512), tag='image_sample', pos=(512, 0), no_resize=True, no_move=True)
             self.view_seg = ImageViewer(size=(512, 512), tag='image_seg', pos=(512, 512), no_resize=True, no_move=True)
             with dpg.window(
-                label='control',
-                tag='control',
-                width=512,
-                height=512 - 30,
-                pos=(0, 512),
-                no_close=True,
-                no_resize=True,
-                no_move=True,
-                # no_title_bar=True,
+                    label='control',
+                    tag='control',
+                    width=512,
+                    height=512 - 30,
+                    pos=(0, 512),
+                    no_close=True,
+                    no_resize=True,
+                    no_move=True,
+                    # no_title_bar=True,
             ):
                 # self.add_menu_bar()
                 self.make_control_panel()
@@ -110,15 +112,17 @@ class TreeSegmentGUI(TreeSegment):
             #     self.make_bottom_status_options()
             self.make_show_tree_2d_mask_level()
             self.make_show_tree_3d_mask_level()
+            self.add_help_popup()
         dpg.set_primary_window('Primary Window', True)
         dpg.set_exit_callback(self.callback_exit)
         with dpg.handler_registry():
             dpg.add_mouse_drag_handler(callback=self.view_3d.callback_mouse_drag)
-            dpg.add_mouse_wheel_handler(callback=self.view_3d.callback_mouse_wheel)
+            dpg.add_mouse_wheel_handler(callback=self.callback_mouse_wheel)
             dpg.add_mouse_release_handler(callback=self.view_3d.callback_mouse_release)
             dpg.add_mouse_move_handler(callback=self.callback_mouse_hover)
             dpg.add_mouse_click_handler(callback=self.callback_mouse_click)
             dpg.add_key_press_handler(callback=self.callback_keypress)
+
         self.view_3d.enable_dynamic_change()
         self.view_2d.enable_dynamic_change()
         self.view_seg.enable_dynamic_change()
@@ -266,10 +270,10 @@ class TreeSegmentGUI(TreeSegment):
 
     @mask_data.setter
     def mask_data(self, data: MaskData = None):
-        if data is None:
-            dpg.hide_item('level0')
-        else:
-            dpg.show_item('level0')
+        # if data is None:
+        #     dpg.hide_item('level0')
+        # else:
+        #     dpg.show_item('level0')
         if data is not None:
             data.filter(torch.argsort(data['masks'].flatten(1).sum(dim=1), descending=True))
         self._mask_data = data
@@ -293,9 +297,13 @@ class TreeSegmentGUI(TreeSegment):
 
     @now_level_2d.setter
     def now_level_2d(self, level):
+        if level == 0:
+            self._points = None
+            self._labels = None
+            self._mask_data = None
         if self._now_level_2d >= -1:
             dpg.bind_item_theme(f"level{self._now_level_2d}", self.default_theme)
-        self.choose_mask = None
+        self.choose_mask = 0
         self._now_level_2d = level
         if self._now_level_2d >= -1:
             dpg.bind_item_theme(f"level{self._now_level_2d}", self.choose_theme)
@@ -332,11 +340,11 @@ class TreeSegmentGUI(TreeSegment):
         return self._choose_mask
 
     @choose_mask.setter
-    def choose_mask(self, index=None):
+    def choose_mask(self, index=0):
         # print('index:', index)
         if index == self._choose_mask:
-            index = None
-        ch_tree = self._choose_mask is not None
+            index = 0
+        ch_tree = self._choose_mask > 0
         if self.mode == 'E2D':
             ch_tree = ch_tree and self.now_level_2d > 0
         # else:
@@ -416,6 +424,10 @@ class TreeSegmentGUI(TreeSegment):
             return self.view_3d.fovy
         elif name == 'sam_path':
             return Path('./weights/sam_vit_h_4b8939.pth').expanduser()
+        elif name == 'sam_l_path':
+            return Path('./weights/sam_vit_l_0b3195.pth').expanduser()
+        elif name == 'sam_b_path':
+            return Path('./weights/sam_vit_b_01ec64.pth').expanduser()
         elif name == 'semantic_sam_l_path':
             return Path("./weights/swinl_only_sam_many2many.pth").expanduser()
         elif name == 'semantic_sam_t_path':
@@ -425,6 +437,7 @@ class TreeSegmentGUI(TreeSegment):
             return default
 
     def _set_value(self, name, value):
+
         def setter(*args):
             return setattr(self, name, value)
 
@@ -438,6 +451,7 @@ class TreeSegmentGUI(TreeSegment):
         return wrapper
 
     def _cbw2(self, cls, func, *args, update_3d=False, **kwargs):
+
         def wrapper():
             if isinstance(func, str):
                 res = getattr(cls, func)(*args, **kwargs)
@@ -474,7 +488,7 @@ class TreeSegmentGUI(TreeSegment):
             self.view_3d._origin_data = None
             alpha = dpg.get_value('alpha')
             image = cv2.addWeighted(image, alpha, color_mask(self._3d_mask, masks.shape[0]), 1 - alpha, 0)
-        if self.mode == 'E3D' and self.choose_mask is not None:
+        if self.mode == 'E3D' and self.choose_mask > 0:
             if self.tree3d.masks is not None and 1 <= self.choose_mask <= len(self.tree3d.masks):
                 mask = self.tree3d.masks[self.choose_mask - 1][tri_id]
                 alpha = dpg.get_value('alpha')
@@ -496,9 +510,7 @@ class TreeSegmentGUI(TreeSegment):
             mask_index = self.levels_2d[self.now_level_2d] - 1
             if mask_index.numel() > 0:
                 assert 0 <= mask_index.min() and mask_index.max() < self.tree2d.num_masks
-                masks = self.tree2d.masks
-                assert 0 <= mask_index.min() and mask_index.max() < self.tree2d.num_masks
-                masks = masks[mask_index]
+                masks = self.tree2d.masks[mask_index]
 
         if masks is not None and masks.numel() > 0:
             self._2d_mask = masks * torch.arange(1, 1 + masks.shape[0], device=masks.device)[:, None, None]
@@ -509,19 +521,13 @@ class TreeSegmentGUI(TreeSegment):
             self._2d_mask = None
         # show_choose
         choose_mask = None
-        if self.choose_mask is not None:
+        if self.choose_mask > 0:
             if self.now_level_2d == 0:
                 assert 0 <= self.choose_mask - 1 < len(self.mask_data['masks'])
                 choose_mask = self.mask_data['masks'][self.choose_mask - 1]
             elif self.now_level_2d > 0 and self.choose_mask <= self.tree2d.num_masks:
                 choose_mask = self.tree2d.masks[self.choose_mask - 1]
 
-        # refine:
-        # if self.now_level_2d == -2 and len(self._refine_points) > 0:
-        #     points = np.array(self._refine_points)
-        #     image = image_add_points(image, points[:, :2], label=points[:, 2])
-        #     if self._refine_mask is not None:
-        #         image = image_add_mask_boundary(image, self._refine_mask[0][0], color=(0, 0, 1.))
         if self.mode == 'S3D':
             if choose_mask is not None:
                 image = image_add_mask_boundary(image, choose_mask, color=(0, 0., 0.))
@@ -533,9 +539,19 @@ class TreeSegmentGUI(TreeSegment):
             image = self.image
         if choose_mask is not None:
             image = image_add_mask_boundary(image, choose_mask, color=(0, 0., 0.))
+        # show_edit mask
+        if self._edit and self.mask_data is not None:
+            mask = self.mask_data['masks'][int(self._edit_mask_idx) % len(self.mask_data['masks'])]
+            image = image_add_mask_boundary(image, mask, color=(0, 0, 1.))
         # show_points
-        if self.now_level_2d in [0, -2] and self._points is not None and self.get_value('show_points', True):
-            image = image_add_points(image, self._points, s=3)
+        if (self.now_level_2d == 0 or self._edit) and self._points is not None and self.get_value('show_points', True):
+            pos_points = self._points if self._labels is None else self._points[self._labels]
+            if len(pos_points) > 0:
+                image = image_add_points(image, pos_points, s=3, color=(1., 0, 0))
+            if self._labels is not None:
+                neg_points = self._points[np.logical_not(self._labels)]
+                if len(neg_points) > 0:
+                    image = image_add_points(image, neg_points, s=3, color=(0, 1., 0))
         self.view_2d.update(image, resize=True)
 
     def run(self):
@@ -546,11 +562,12 @@ class TreeSegmentGUI(TreeSegment):
         last_size = None
         while dpg.is_dearpygui_running():
             dpg.render_dearpygui_frame()
-            if self.view_3d.need_update:
-                dpg.set_value('eye_x', self.view_3d.eye[0].item())
-                dpg.set_value('eye_y', self.view_3d.eye[1].item())
-                dpg.set_value('eye_z', self.view_3d.eye[2].item())
-            self.view_3d.update(False)
+            if self.mode != 'E2D':
+                if self.view_3d.need_update:
+                    dpg.set_value('eye_x', self.view_3d.eye[0].item())
+                    dpg.set_value('eye_y', self.view_3d.eye[1].item())
+                    dpg.set_value('eye_z', self.view_3d.eye[2].item())
+                self.view_3d.update(False)
             if self._need_update_2d:
                 self.show_2d()
                 self._need_update_2d = False
@@ -563,7 +580,7 @@ class TreeSegmentGUI(TreeSegment):
             dpg.set_value('fps', f"FPS: {dpg.get_frame_rate()}")
 
     def reset_2d(self):
-        self.choose_mask = None
+        self.choose_mask = 0
         self.now_level_2d = -1
         super().reset_2d()
         if self._image is None:
@@ -593,6 +610,7 @@ class TreeSegmentGUI(TreeSegment):
 
     def run_tree_seg_2d_stage1(self):
         self.mask_data = None
+        self.now_level_2d = 0
         image = self.image
         points = self.tree2d.sample_grid(dpg.get_value('points_per_side'))
         # filter points in background
@@ -602,6 +620,7 @@ class TreeSegmentGUI(TreeSegment):
             y = np.clip(np.rint(points[:, 1] * self.tri_id.shape[0]), 0, self.tri_id.shape[0] - 1).astype(np.int32)
             points = points[self.tri_id.cpu().numpy()[y, x] > 0].reshape(-1, 2)
         self._points = points
+        self._labels = np.ones_like(points, dtype=bool)
         self.view_2d.update(image_add_points(image, points, 3), resize=True)
         if not self.predictor.is_image_set:
             self.predictor.set_image(np.clip(self.image * 255, 0, 255).astype(np.uint8))
@@ -611,7 +630,6 @@ class TreeSegmentGUI(TreeSegment):
         self.tree2d.remove_not_in_tree()
         self.levels_2d = self.tree2d.get_levels()
         self.show_tree_update()
-        self.now_level_2d = 0
 
     def run_tree_seg_2d_stage2(self):
         # if not self.mask_data:
@@ -623,6 +641,7 @@ class TreeSegmentGUI(TreeSegment):
         self.now_level_2d = 0
         points = self.tree2d.sample_by_counts(dpg.get_value('points_per_update'))
         self._points = points
+        self._labels = None if points is None else np.ones_like(points, dtype=bool)
         if points is None:
             self.view_2d.update(self.image, resize=True)
             # print('ERROR: no unfilled mask')
@@ -637,8 +656,16 @@ class TreeSegmentGUI(TreeSegment):
         self.tree2d.remove_not_in_tree()
         self.levels_2d = self.tree2d.get_levels()
         self.show_tree_update()
-        self.now_level_2d = 0
         return True
+
+    def run_edit_2d(self):
+        print('[GUI] run refine:')
+        self._need_update_2d = True
+        points = self._points * np.array(self.predictor.original_size)[::-1]
+        masks, scores, _ = self.predictor.predict(points, self._labels, return_numpy=False)
+        self.mask_data = MaskData(masks=masks, iou_preds=scores)
+        self._edit_mask_idx = 0
+        self._need_update_2d = True
 
     def copy_camera_pose(self, to_2d=True):
         if to_2d:
@@ -652,8 +679,8 @@ class TreeSegmentGUI(TreeSegment):
             background = torch.logical_not(self.aux_data_2d[0][0])
             masks = torch.stack([background] + [self.aux_data_2d[x.item()][0] for x in indices])
             # print('masks:', utils.show_shape(masks))
-            self.tree2d.clear(masks=masks.to(self.tree2d.device),
-                scores=torch.zeros(masks.shape[0], device=self.tree2d.device))
+            self.tree2d.clear(
+                masks=masks.to(self.tree2d.device), scores=torch.zeros(masks.shape[0], device=self.tree2d.device))
             # self.tree_data.update_tree()
             # print(utils.show_shape(self.tree_data.data, self.tree_data.parent))
             # print(indices)
@@ -779,6 +806,8 @@ class TreeSegmentGUI(TreeSegment):
         pass
 
     def callback_mouse_hover(self, sender, app_data):
+        if self._edit:
+            return
         if dpg.is_item_hovered(self.view_3d.image_tag):
             if self.now_level_3d == 0:
                 return
@@ -857,6 +886,15 @@ class TreeSegmentGUI(TreeSegment):
                 self.view_seg._origin_data = None
                 # print('restore origin data')
 
+    def callback_mouse_wheel(self, sender, app_data):
+        self.view_3d.callback_mouse_wheel(sender, app_data)
+        if dpg.is_item_hovered(self.view_2d.win_tag):
+            x, y = self.view_2d.get_mouse_pos()
+            if self._edit and self.mask_data is not None:
+                self._edit_mask_idx += app_data * 0.5
+                # print('change edit mask index:', self._edit_mask_idx, self.mask_data['masks'].shape)
+                self._need_update_2d = True
+
     def callback_mouse_click(self, sender, app_data):
         if dpg.is_item_left_clicked(self.view_seg.image_tag):
             if self._2d_mask is None:
@@ -873,19 +911,41 @@ class TreeSegmentGUI(TreeSegment):
                 self.choose_mask = mask_id + 1
                 self._need_update_2d = self.mode != 'E3D'
         if dpg.is_item_left_clicked(self.view_2d.image_tag):
-            if self._2d_mask is None:
-                return
             x, y = self.view_2d.get_mouse_pos()
-            H1, W1 = self._2d_mask.shape
-            W2, H2 = self.view_2d.size
-            x, y = int(x * W1 / W2), int(y * H1 / H2)
-            mask_id = self._2d_mask[y, x].item() - 1
-            if self.now_level_2d > 0 and mask_id >= 0:
-                mask_id = self.levels_2d[self.now_level_2d][mask_id - 1].item()
-            if mask_id > 0:
-                print('click:', mask_id)
-                self.choose_mask = mask_id + 1
-                self._need_update_2d = self.mode != 'E3D'
+            if self.mode == 'E2D' and self._edit:
+                W, H = self.view_2d.size
+                x, y = x / W, y / H
+                if self._points is None:
+                    self._points = np.array([[x, y]], dtype=np.float32)
+                    self._labels = np.array([True], dtype=bool)
+                else:
+                    self._points = np.append(self._points, [[x, y]], axis=0)
+                    self._labels = np.append(self._labels, [True], axis=0)
+                self.run_edit_2d()
+            elif self._2d_mask is not None:
+                H1, W1 = self._2d_mask.shape
+                W2, H2 = self.view_2d.size
+                x, y = int(x * W1 / W2), int(y * H1 / H2)
+                mask_id = self._2d_mask[y, x].item()
+                if self.now_level_2d > 0 and mask_id > 0:
+                    mask_id = self.levels_2d[self.now_level_2d][mask_id - 1].item()
+                if mask_id > 0:
+                    print('click:', mask_id)
+                    self.choose_mask = mask_id
+                    self._need_update_2d = self.mode != 'E3D'
+        if dpg.is_item_right_clicked(self.view_2d.image_tag):
+            x, y = self.view_2d.get_mouse_pos()
+            if self.mode == 'E2D' and self._edit:
+                W, H = self.view_2d.size
+                x, y = x / W, y / H
+                if self._points is None:
+                    self._points = np.array([[x, y]], dtype=np.float32)
+                    self._labels = np.array([False], dtype=bool)
+                else:
+                    self._points = np.append(self._points, [[x, y]], axis=0)
+                    self._labels = np.append(self._labels, [False], axis=0)
+                self.run_edit_2d()
+
         # if dpg.is_item_left_clicked(self.view_3d.image_tag):
         #     if self._2d_mask is None:
         #         return
@@ -914,6 +974,90 @@ class TreeSegmentGUI(TreeSegment):
             elif self.mode == 'E2D':
                 self._need_update_2d = True
 
+    def _keypress_edit_2d(self):
+        if dpg.is_key_pressed(dpg.mvKey_1) or dpg.is_key_pressed(dpg.mvKey_NumPad1):
+            self.now_level_2d = 1
+        elif dpg.is_key_pressed(dpg.mvKey_2) or dpg.is_key_pressed(dpg.mvKey_NumPad2):
+            self.now_level_2d = 2
+        elif dpg.is_key_pressed(dpg.mvKey_3) or dpg.is_key_pressed(dpg.mvKey_NumPad3):
+            self.now_level_2d = 3
+        elif dpg.is_key_pressed(dpg.mvKey_4) or dpg.is_key_pressed(dpg.mvKey_NumPad4):
+            self.now_level_2d = 4
+        elif dpg.is_key_pressed(dpg.mvKey_5) or dpg.is_key_pressed(dpg.mvKey_NumPad5):
+            self.now_level_2d = 5
+        elif dpg.is_key_pressed(dpg.mvKey_6) or dpg.is_key_pressed(dpg.mvKey_NumPad6):
+            self.now_level_2d = 6
+        elif dpg.is_key_pressed(dpg.mvKey_7) or dpg.is_key_pressed(dpg.mvKey_NumPad7):
+            self.now_level_2d = 7
+        elif dpg.is_key_pressed(dpg.mvKey_8) or dpg.is_key_pressed(dpg.mvKey_NumPad8):
+            self.now_level_2d = 8
+        elif dpg.is_key_pressed(dpg.mvKey_9) or dpg.is_key_pressed(dpg.mvKey_NumPad9):
+            self.now_level_2d = 9
+        elif dpg.is_key_pressed(dpg.mvKey_0) or dpg.is_key_pressed(dpg.mvKey_NumPad0):
+            self.now_level_2d = 0
+        if dpg.is_key_pressed(dpg.mvKey_Back):
+            if self._points is not None:
+                self._points = self._points[:-1]
+                self._labels = self._labels[:-1]
+                self.run_edit_2d()
+        elif dpg.is_key_pressed(dpg.mvKey_D) or dpg.is_key_pressed(dpg.mvKey_Delete):
+            if self.choose_mask > 0 and self.now_level_2d > 0:
+                self.tree2d.node_delete(self.choose_mask, move_children=True)
+                self.levels_2d = self.tree2d.get_levels()
+                self.choose_mask = 0
+                self._need_update_2d = True
+                print(f'[GUI] Delete node {self.choose_mask} from tree')
+        elif dpg.is_key_pressed(dpg.mvKey_A) or dpg.is_key_pressed(dpg.mvKey_Insert):
+            if self._edit and self.mask_data is not None:
+                idx = int(self._edit_mask_idx) % len(self.mask_data['masks'])
+                index = self.tree2d.insert(mask=self.mask_data['masks'][idx], score=self.mask_data['iou_preds'][idx])
+                self.levels_2d = self.tree2d.get_levels()
+                self.now_level_2d = self.tree2d.get_depth(index)
+                self.choose_mask = 0 if index <= 0 else index
+                self.switch_edit_mode()
+                print(f'[GUI] Add new node {index} to tree')
+        elif dpg.is_key_pressed(dpg.mvKey_C):
+            if self._edit:
+                self._points = None
+                self._labels = None
+                self.mask_data = None
+                self._need_update_2d = True
+                print(f'[GUI] Clear all points')
+        elif dpg.is_key_pressed(dpg.mvKey_S):
+            if self.choose_mask > 0 and self._edit and self.mask_data is not None:
+                new_mask = self.mask_data['masks'][int(self._edit_mask_idx) % len(self.mask_data['masks'])]
+                old_mask = self.tree2d.masks[self.choose_mask - 1]
+                new_mask = old_mask & (~new_mask)
+                self.tree2d.masks[self.choose_mask - 1] = new_mask
+                self.tree2d.areas[self.choose_mask - 1] = new_mask.sum()
+                self.tree2d.node_delete(self.choose_mask, move_children=True)
+                index = self.tree2d.insert(new_mask, i=self.choose_mask)
+                self.levels_2d = self.tree2d.get_levels()
+                self.choose_mask = max(0, index)
+                self.switch_edit_mode()
+                print(f'[GUI] Subtract mask from node {self.choose_mask} in tree')
+        elif dpg.is_key_pressed(dpg.mvKey_F):
+            if self.choose_mask > 0 and self._edit and self.mask_data is not None:
+                new_mask = self.mask_data['masks'][int(self._edit_mask_idx) % len(self.mask_data['masks'])]
+                old_mask = self.tree2d.masks[self.choose_mask - 1]
+                new_mask = new_mask | old_mask
+                self.tree2d.masks[self.choose_mask - 1] = new_mask
+                self.tree2d.areas[self.choose_mask - 1] = new_mask.sum()
+                self.tree2d.node_delete(self.choose_mask, move_children=True)
+                index = self.tree2d.insert(new_mask, i=self.choose_mask)
+                self.levels_2d = self.tree2d.get_levels()
+                self.choose_mask = max(0, index)
+                self.switch_edit_mode()
+                print(f'[GUI] Fusion mask from node {self.choose_mask} in tree')
+        elif dpg.is_key_pressed(dpg.mvKey_R):
+            self.tree2d.remove_not_in_tree()
+            self.tree2d.reset()
+            self.tree2d.update_tree()
+            self.tree2d.remove_not_in_tree()
+            self.levels_2d = self.tree2d.get_levels()
+            print('[GUI] Rebuild Tree2D')
+        return
+
     def callback_keypress(self, sender, app_data):
         # print('sender:', sender, 'app_data:', app_data)
         if self.mode == 'E3D':
@@ -924,7 +1068,7 @@ class TreeSegmentGUI(TreeSegment):
             cnt = 0
         if dpg.is_key_pressed(dpg.mvKey_Left):
             if self.mode != 'S3D' and cnt > 0:
-                choose_mask = 1 if self.choose_mask is None else self.choose_mask
+                choose_mask = 1 if self.choose_mask <= 0 else self.choose_mask
                 init_index = choose_mask
                 while True:
                     choose_mask -= 1
@@ -933,18 +1077,18 @@ class TreeSegmentGUI(TreeSegment):
                     if dpg.does_alias_exist(f"tree_{choose_mask}"):
                         break
                     if choose_mask == init_index:
-                        choose_mask = None
+                        choose_mask = 0
                         break
                 self.choose_mask = choose_mask
             else:
-                self.choose_mask = None
+                self.choose_mask = 0
             if self.mode == 'E3D':
                 self.view_3d.need_update = True
             elif self.mode == 'E2D':
                 self._need_update_2d = True
         elif dpg.is_key_pressed(dpg.mvKey_Right):
             if self.mode != 'S3D' and cnt > 0:
-                choose_mask = cnt if self.choose_mask is None else self.choose_mask
+                choose_mask = cnt if self.choose_mask <= 0 else self.choose_mask
                 init_index = choose_mask
                 while True:
                     choose_mask += 1
@@ -953,20 +1097,42 @@ class TreeSegmentGUI(TreeSegment):
                     if dpg.does_alias_exist(f"tree_{choose_mask}"):
                         break
                     if choose_mask == init_index:
-                        choose_mask = None
+                        choose_mask = 0
                         break
                 self.choose_mask = choose_mask
             else:
-                self.choose_mask = None
+                self.choose_mask = 0
             if self.mode == 'E3D':
                 self.view_3d.need_update = True
             elif self.mode == 'E2D':
                 self._need_update_2d = True
+        if self.mode == 'E2D':
+            self._keypress_edit_2d()
+        if dpg.is_key_pressed(dpg.mvKey_E):
+            self.switch_edit_mode()
+            self._need_update_2d = True
+        if dpg.is_key_pressed(dpg.mvKey_H):
+            if dpg.get_item_state('win_help')['visible']:
+                dpg.hide_item('win_help')
+            else:
+                dpg.show_item('win_help')
 
     def callback_exit(self):
         self.save_ini()
         dpg.minimize_viewport()
         console.print(f"[red]Debug callback exit")
+
+    def switch_edit_mode(self):
+        if self._edit:
+            self._edit = False
+            dpg.bind_item_theme('edit_mode', self.default_theme)
+        else:
+            self._edit = True
+            dpg.bind_item_theme('edit_mode', self.choose_theme)
+        self.mask_data = None
+        self._points = None
+        self._labels = None
+        self._need_update_2d = True
 
     def make_control_panel(self):
         with dpg.group(horizontal=True):
@@ -981,6 +1147,7 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_button(label=self._model_type, tag='change_model', height=30)
 
             def change_model(name='SAM'):
+
                 def change(*args):
                     if self._model_type != name:
                         self._predictor = None
@@ -996,6 +1163,8 @@ class TreeSegmentGUI(TreeSegment):
 
             with dpg.popup(dpg.last_item(), mousebutton=dpg.mvMouseButton_Left, modal=False, tag='win_change_model'):
                 dpg.add_button(label='SAM', callback=change_model('SAM'))
+                dpg.add_button(label='SAM-L', callback=change_model('SAM-L'))
+                dpg.add_button(label='SAM-B', callback=change_model('SAM-B'))
                 dpg.add_button(label='Semantic-SAM-L', callback=change_model('Semantic-SAM-L'))
                 dpg.add_button(label='Semantic-SAM-T', callback=change_model('Semantic-SAM-T'))
 
@@ -1094,6 +1263,7 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_slider_float(min_value=0, max_value=1., default_value=0.5, tag='alpha', callback=self.update_viewer)
 
         def changed_callback(item):
+
             def changed(*args):
                 if self._predictor is not None:
                     setattr(self._predictor, item, dpg.get_value(item))
@@ -1107,13 +1277,13 @@ class TreeSegmentGUI(TreeSegment):
 
     def make_edit_2d_options(self):
         with dpg.file_dialog(
-            directory_selector=False,
-            show=False,
-            callback=self.change_image,
-            id="choose_image",
-            width=700,
-            height=400,
-            default_path=self.image_dir.as_posix(),
+                directory_selector=False,
+                show=False,
+                callback=self.change_image,
+                id="choose_image",
+                width=700,
+                height=400,
+                default_path=self.image_dir.as_posix(),
         ):
             dpg.add_file_extension("Image{.png,.jpg,.jpeg,.tif}", custom_text='[Image]')
         with dpg.group(horizontal=True):
@@ -1145,7 +1315,7 @@ class TreeSegmentGUI(TreeSegment):
                 min_value=128,
                 callback=self._cbw(self.change_image))
             dpg.add_text('show points:')
-            dpg.add_checkbox(tag='show_points', callback=self._set_value('_need_update_2d', True))
+            dpg.add_checkbox(tag='show_points', callback=self._set_value('_need_update_2d', True), default_value=True)
 
         with dpg.group(horizontal=True):
             W, H = 70, 40
@@ -1155,6 +1325,7 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_button(width=W, height=H, label='Stage2', callback=self.run_tree_seg_2d_stage2)
             dpg.add_button(width=W, height=H, label='Post', callback=self.run_tree_seg_2d_post)
             dpg.add_button(width=W, height=H, label='AutoRun', callback=self.autorun_tree_seg_2d)
+            dpg.add_button(width=W, height=H, label='Edit', tag='edit_mode', callback=self.switch_edit_mode)
 
     def make_2d_tree_segmentatin_options(self):
         with dpg.group(horizontal=True):
@@ -1167,19 +1338,20 @@ class TreeSegmentGUI(TreeSegment):
             dpg.add_button(width=W, height=H, label='AutoRun', callback=self.autorun_tree_seg_2d)
 
     def make_3d_tree_segmentation_options(self):
+
         def update_view_3d(*args):
             self.view_3d.need_update = True
             # print('need update view3d')
 
         with dpg.file_dialog(
-            # directory_selector=False,
-            show=False,
-            callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
-            id="choose_mesh",
-            width=700,
-            height=400,
-            default_path='/home/wan/data/meshes',
-            modal=True,
+                # directory_selector=False,
+                show=False,
+                callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
+                id="choose_mesh",
+                width=700,
+                height=400,
+                default_path='/home/wan/data/meshes',
+                modal=True,
         ):
             dpg.add_file_extension("Mesh{.obj,.ply}", custom_text='mesh')
             with dpg.group(horizontal=True):
@@ -1346,7 +1518,7 @@ class TreeSegmentGUI(TreeSegment):
         for i, level in enumerate(range(-1, 10)):
             dpg.add_button(
                 label={
-                    0: 'T',
+                    0: 'E',
                     -1: 'I'
                 }[level] if level <= 0 else f"{level}",
                 pos=(pad + (size + pad) * i, pad),
@@ -1359,12 +1531,14 @@ class TreeSegmentGUI(TreeSegment):
             dpg.bind_item_theme(f"level{level}", self.default_theme)
         dpg.pop_container_stack()
         dpg.show_item('level-1')
+        dpg.show_item('level0')
 
     def make_show_tree_3d_mask_level(self):
         size = 30
         pad = 10
 
         def show_level_callback(level):
+
             def show_level():
                 self.now_level_3d = level
                 return
@@ -1383,6 +1557,24 @@ class TreeSegmentGUI(TreeSegment):
                 callback=show_level_callback(level))
             dpg.bind_item_theme(f"depth{level}", self.default_theme)
         dpg.pop_container_stack()
+
+    def add_help_popup(self):
+        with dpg.window(label='Help', modal=True, show=False, tag='win_help'):
+            dpg.add_text(f'"H": show/hide this help page')
+            dpg.add_text(f'"<Left>": choose last node in the tree')
+            dpg.add_text(f'"<Right>": choose next node in the tree')
+            dpg.add_text(f'"E": Enter/Exit edit mode')
+            dpg.add_separator()
+            dpg.add_text('Edit Mode')
+            dpg.add_text("Left/Right Click: add positive or negative point")
+            dpg.add_text(f'"D" or "<Delete>": Delete choosed node in tree')
+            dpg.add_text(f'"A" or "<Insert>": Insert new mask into tree')
+            dpg.add_text(f'"F": Fuse(Merge) new mask and choosed mask')
+            dpg.add_text(f'"S": Subtract new mask from choosed mask')
+            dpg.add_text(f'"C" or <ESC>: Clear all points')
+            dpg.add_text(f'"R": Rebuild Tree')
+            dpg.add_text(f'"<Back>": delete last add point')
+            dpg.add_text(f'Mouse Wheel: choose different masks')
 
     def change_image(self, sender=None, app_data=None, index=None, next=False, last=False):
         print(f"[GUI]", sender, app_data, index, next, last)
@@ -1516,6 +1708,7 @@ class TreeSegmentGUI(TreeSegment):
         dpg.set_item_pos('load_popup', dpg.get_item_pos('control'))
 
         def _load(load_path: Path):
+
             def __load():
                 if self.mode == 'E2D':
                     self.reset_2d()

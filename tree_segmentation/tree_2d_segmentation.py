@@ -171,6 +171,15 @@ class TreeStructure:
 
         return levels
 
+    def get_depth(self, i: int):
+        depth = 0
+        while i != 0:
+            if i < 0:
+                return -1
+            depth += 1
+            i = self.parent[i].item()
+        return depth
+
     def node_rearrange(self, indices=None):
         if self.verbose > 0:
             print(f'[Tree] rerange nodes')

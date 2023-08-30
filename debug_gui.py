@@ -13,7 +13,7 @@ torch.set_anomaly_enabled(True)
 while True:
     now = gui.TreeSegmentGUI(model=model)
     now.run()
-    if hasattr(now, '_sam'):
+    if hasattr(now, '_model'):
         model = now.model
     dpg.stop_dearpygui()
     dpg.destroy_context()

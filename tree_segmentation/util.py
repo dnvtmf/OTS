@@ -78,17 +78,23 @@ def show_masks(image, *masks, mask=None, alpha=None):
     # plt.show()
 
 
-def image_add_points(image: np.ndarray, points: np.ndarray, s=5):
-    if points.max() <= 1.1:  # noqa
-        points = points * np.array([image.shape[1], image.shape[0]])
+def image_add_points(image: np.ndarray, points: np.ndarray, s=5, color=(1, 0, 0)):
     image = image.copy()
     H, W = image.shape[:2]
+    if points.max() <= 1.1:  # noqa
+        points = points * np.array([W, H])
+    color = np.array(color)
+    assert 0 <= color.min() and color.max() <= 1 and color.shape == (3,)
+    if image.dtype == np.uint8:
+        color = (color * 255).astype(np.uint8)
+    else:
+        color = color.astype(image.dtype)
     for i in range(points.shape[0]):
         x, y = points[i]
         for dx in range(-s, s + 1):
             for dy in range(-s, s + 1):
                 if dx * dx + dy * dy <= s * s and 0 <= x + dx < W and 0 <= y + dy < H:
-                    image[int(y + dy), int(x + dx), :] = np.array((1., 0, 0))
+                    image[int(y + dy), int(x + dx), :] = color
     return image
 
 
