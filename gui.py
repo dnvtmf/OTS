@@ -568,7 +568,7 @@ class TreeSegmentGUI(TreeSegment):
                     dpg.set_value('eye_y', self.view_3d.eye[1].item())
                     dpg.set_value('eye_z', self.view_3d.eye[2].item())
                 self.view_3d.update(False)
-            if self._need_update_2d:
+            if True and self._need_update_2d:
                 self.show_2d()
                 self._need_update_2d = False
             # now_size = dpg.get_item_width(view_3d._win_id), dpg.get_item_height(view_3d._win_id)
@@ -658,12 +658,27 @@ class TreeSegmentGUI(TreeSegment):
         self.show_tree_update()
         return True
 
+    def run_tree_seg_2d_post(self):
+        super().run_tree_seg_2d_post()
+        self._need_update_2d = True
+        # fast segment
+        save_path = self.image_dir.joinpath('../my_mask').joinpath(self.image_paths[self.image_index])
+        print(save_path)
+        save_path.parent.mkdir(exist_ok=True)
+        mask = self.tree2d.masks[0].cpu().numpy()
+        utils.save_image(save_path, mask)
+        self.change_image(next=True)
+        self.predictor.set_image((self.image * 255).astype(np.uint8))
+        self.switch_edit_mode()
+        self._need_update_2d = True
+
     def run_edit_2d(self):
-        print('[GUI] run refine:')
         self._need_update_2d = True
         points = self._points * np.array(self.predictor.original_size)[::-1]
         masks, scores, _ = self.predictor.predict(points, self._labels, return_numpy=False)
-        self.mask_data = MaskData(masks=masks, iou_preds=scores)
+        order = torch.argsort(scores, descending=True)
+        print('[GUI] run edit 2d', utils.show_shape(masks, scores), scores[order])
+        self.mask_data = MaskData(masks=masks[order], iou_preds=scores[order])
         self._edit_mask_idx = 0
         self._need_update_2d = True
 
@@ -1056,6 +1071,8 @@ class TreeSegmentGUI(TreeSegment):
             self.tree2d.remove_not_in_tree()
             self.levels_2d = self.tree2d.get_levels()
             print('[GUI] Rebuild Tree2D')
+        elif dpg.is_key_pressed(dpg.mvKey_Spacebar):
+            self.run_tree_seg_2d_post()
         return
 
     def callback_keypress(self, sender, app_data):
