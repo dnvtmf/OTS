@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.8)
 project(bcnn CXX CUDA)
 
-set(PROJECT_NAME _bcnn)
+set(PROJECT_NAME C_ext)
 
 #------ CUDA configure -----------
 set(CUDA_SEPARABLE_COMPILATION ON)
@@ -82,16 +82,6 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
 
 ## find sources files
 set(SOURCE_DIR "src")
-# LIST(APPEND SOURCE_DIR "src/conv")
-LIST(APPEND SOURCE_DIR "src/dcn")
-LIST(APPEND SOURCE_DIR "src/detection")
-LIST(APPEND SOURCE_DIR "src/detection_3d")
-LIST(APPEND SOURCE_DIR "src/other")
-LIST(APPEND SOURCE_DIR "src/losses")
-LIST(APPEND SOURCE_DIR "src/non_linear")
-LIST(APPEND SOURCE_DIR "src/quantization")
-LIST(APPEND SOURCE_DIR "src/quantization_full")
-LIST(APPEND SOURCE_DIR "src/nerf")
 foreach(SRC_DIR IN LISTS SOURCE_DIR)
   set(SRC_TEMP)
   aux_source_directory(${SRC_DIR} SRC_TEMP)

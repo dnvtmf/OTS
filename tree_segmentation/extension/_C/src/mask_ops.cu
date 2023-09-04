@@ -1,11 +1,88 @@
 #include "common.h"
+#include "util.cuh"
 
 namespace tree_seg {
 using torch::Tensor;
+#define DISPATCH_CASE_MY_TYPES(...)                   \
+  AT_DISPATCH_CASE(at::ScalarType::Byte, __VA_ARGS__) \
+  AT_DISPATCH_CASE(at::ScalarType::Int, __VA_ARGS__)  \
+  AT_DISPATCH_CASE(at::ScalarType::Short, __VA_ARGS__)
 
-template <typename Ta = int32_t, typename Tb = int32_t>
-void intersect_cpu(int N, int M, int H, int W, const int32_t* a_start, const Ta* a_counts, const int32_t* b_start,
-    const Tb* b_counts, float_t* out) {
+#define DISPATCH_MY_TYPES(TYPE, NAME, ...) AT_DISPATCH_SWITCH(TYPE, NAME, DISPATCH_CASE_MY_TYPES(__VA_ARGS__))
+
+template <typename T = int32_t>
+__global__ void mask_to_binary_kernel(
+    int W, const int32_t* __restrict__ start, const T* __restrict__ counts, bool* __restrict__ output) {
+  auto* ptr     = counts + start[blockIdx.x];
+  int e         = *ptr;
+  bool v        = 0;
+  bool* out_ptr = output + blockIdx.x * W;
+  for (int x = threadIdx.x; x < W; x += blockDim.x) {
+    while (e <= x) {
+      e += *(++ptr);
+      v ^= 1;
+    }
+    out_ptr[x] = v;
+  }
+}
+
+Tensor mask_to_binary(int W, Tensor& start, Tensor& counts) {
+  auto out_shape = start.sizes().vec();
+  out_shape.push_back(W);
+  Tensor out = torch::zeros(at::IntArrayRef(out_shape), torch::TensorOptions().dtype(at::kBool).device(start.device()));
+  CHECK_CONTIGUOUS(start);
+  CHECK_CONTIGUOUS(counts);
+  BCNN_ASSERT(start.scalar_type() == at::kInt, "start must be int32");
+  DISPATCH_MY_TYPES(counts.type(), "mask_to_binary", [&] {
+    if (start.is_cuda()) {
+      mask_to_binary_kernel<scalar_t> KERNEL_ARG(start.numel(), WARP_SIZE)(
+          W, start.data_ptr<int32_t>(), counts.data_ptr<scalar_t>(), out.data<bool>());
+      CHECK_CUDA_ERROR("mask_to_binary");
+    } else {
+      bool* out_ptr = out.data<bool>();
+      for (int k = 0; k < start.numel(); k++) {
+        auto* c_ptr = counts.data_ptr<scalar_t>() + start.data_ptr<int32_t>()[k];
+        bool v      = 0;
+        for (int x = 0, e = *c_ptr; x < W; ++x) {
+          if (x == e) v ^= 1, e += *(++c_ptr);
+          *(out_ptr++) = v;
+        }
+      }
+    }
+  });
+
+  return out;
+}
+
+template <typename T = int32_t>
+__global__ void mask_from_binary();
+
+template <typename T = int32_t>
+__global__ void intersect_cuda(int N, int M, int H, int W, const int32_t* __restrict__ a_start,
+    const T* __restrict__ a_counts, const int32_t* __restrict__ b_start, const T* __restrict__ b_counts,
+    float_t* __restrict__ out) {
+  const int i = blockIdx.x / M, j = blockIdx.x % M;
+  float sum = 0;
+  for (int k = threadIdx.x; k < H; k += blockDim.x) {
+    auto *ca = a_counts + a_start[i * H + k], *cb = b_counts + b_start[j * H + k];
+    int na = *ca, nb = *cb;
+    bool a = 0, b = 0;
+    while (na < W || nb < W) {
+      if (na < nb)
+        a ^= 1, na += *(++ca);
+      else
+        b ^= 1, nb += *(++cb);
+      if (a & b) sum += min(na, nb) - max(na - *ca, nb - *cb);
+    }
+  }
+  __syncthreads();
+  reduce_sum_block<float, false>(sum);
+  if (threadIdx.x == 0) out[blockIdx.x] = sum;
+}
+
+template <typename T = int32_t>
+void intersect_cpu(int N, int M, int H, int W, const int32_t* a_start, const T* a_counts, const int32_t* b_start,
+    const T* b_counts, float_t* out) {
   for (int i = 0; i < N; ++i) {
     for (int j = 0; j < M; ++j) {
       float_t sum = 0;
@@ -14,7 +91,7 @@ void intersect_cpu(int N, int M, int H, int W, const int32_t* a_start, const Ta*
         auto *ca = a_counts + sa, *cb = b_counts + sb;
         int na = *ca, nb = *cb;
         bool a = 0, b = 0;
-        while (na < W && nb < W) {
+        while (na < W || nb < W) {
           if (na < nb) {
             a ^= 1;
             ca++;
@@ -24,9 +101,10 @@ void intersect_cpu(int N, int M, int H, int W, const int32_t* a_start, const Ta*
             cb++;
             nb += *cb;
           }
-          if (a && b) sum += min(na, nb) - max(na - *ca, nb - *cb);
+          if (a & b) sum += min(na, nb) - max(na - *ca, nb - *cb);
         }
       }
+      *(out++) = sum;
     }
   }
 }
@@ -35,16 +113,25 @@ void intersect(int W, Tensor& a_start, Tensor& a_counts, Tensor& b_start, Tensor
   BCNN_ASSERT(a_start.device() == b_start.device(), "a, b must be same device");
   BCNN_ASSERT(a_start.scalar_type() == at::kInt && b_start.scalar_type() == at::kInt, "dtype of a, b must be int32");
   BCNN_ASSERT(a_start.size(-1) == b_start.size(-1), "a, b must have same (H, W)");
+  BCNN_ASSERT(a_counts.dtype() == a_counts.dtype(), "a_counts, b_counts must have same dtype");
   const int H = a_start.size(-1);
   const int N = a_start.numel() / H, M = b_start.numel() / H;
   BCNN_ASSERT(output.numel() == N * M && output.scalar_type() == at::kFloat, "Error output shape or dtype");
-  if (a_start.is_cuda()) {
-    BCNN_ASSERT(false, "Not Implemented");
-  } else {
-    intersect_cpu(N, M, H, W, a_start.data_ptr<int32_t>(), a_counts.to(at::kInt).data_ptr<int32_t>(),
-        b_start.data_ptr<int32_t>(), b_counts.to(at::kInt).data_ptr<int32_t>(), output.data<float>());
-  }
+  DISPATCH_MY_TYPES(a_counts.type(), "intersect", [&] {
+    if (a_start.is_cuda()) {
+      intersect_cuda KERNEL_ARG(N * M, min(1024, get_cuda_threads(H)))(N, M, H, W, a_start.data_ptr<int32_t>(),
+          a_counts.data_ptr<scalar_t>(), b_start.data_ptr<int32_t>(), b_counts.data_ptr<scalar_t>(),
+          output.data<float>());
+      CHECK_CUDA_ERROR("intersect");
+    } else {
+      intersect_cpu(N, M, H, W, a_start.data_ptr<int32_t>(), a_counts.data_ptr<scalar_t>(), b_start.data_ptr<int32_t>(),
+          b_counts.data_ptr<scalar_t>(), output.data<float>());
+    }
+  });
 }
 
 }  // namespace tree_seg
-REGIST_PYTORCH_EXTENSION(tree_seg_mask, { m.def("intersect", &tree_seg::intersect, "intersect"); });
+REGIST_PYTORCH_EXTENSION(tree_seg_mask, {
+  m.def("mask_to_binary", &tree_seg::mask_to_binary, "mask_to_binary");
+  m.def("intersect", &tree_seg::intersect, "intersect");
+});

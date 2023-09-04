@@ -16,12 +16,12 @@ def get_cpp_or_cuda_sources(src_dir):
 
 
 setup(
-    name='wan_extension',
-    version='2022.11',
+    name='C_ext',
+    version='2023.09',
     description='build time {}'.format(time.strftime("%y-%m-%d %H:%M:%S", time.localtime(time.time()))),
     ext_modules=[
         CUDAExtension(
-            name='_bcnn',
+            name='C_ext',
             sources=list(get_cpp_or_cuda_sources('src')),
             extra_compile_args={
                 'cxx': ["-fopenmp", "-O3"],

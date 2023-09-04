@@ -8,22 +8,22 @@ def get_python_function(name: str):
 
 
 try:
-    from . import _bcnn
+    from . import C_ext
 
     def try_use_C_extension(func):
         _functions[func.__name__] = func
-        if hasattr(_bcnn, func.__name__):
-            return getattr(_bcnn, func.__name__)
+        if hasattr(C_ext, func.__name__):
+            return getattr(C_ext, func.__name__)
         else:
             warnings.warn(f'No such function in C/CPP/CUDA extension: {func.__name__}')
             return func
 
     def get_C_function(name: str):
-        return getattr(_bcnn, name, None)
+        return getattr(C_ext, name, None)
 
     def have_C_functions(*names):
         for name in names:
-            if not hasattr(_bcnn, name):
+            if not hasattr(C_ext, name):
                 return False
         return True
 except ImportError as e:

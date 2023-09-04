@@ -1,5 +1,4 @@
-#ifndef BCNN_COMMON_HPP_
-#define BCNN_COMMON_HPP_
+#pragma once
 #include <pybind11/pybind11.h>
 #include <torch/extension.h>
 
@@ -55,4 +54,3 @@ class PyTorchExtensionRegistrer {
 
 #define REGIST_PYTORCH_EXTENSION(name, ...) \
   PyTorchExtensionRegistrer pytorch_extenstion_##name([](py::module_ &m) { __VA_ARGS__; });
-#endif

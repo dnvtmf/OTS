@@ -5,12 +5,16 @@ from tree_segmentation.extension._C import get_C_function, have_C_functions
 
 class Mask:
     """like run-length encoding (RLE), but only encode last dim"""
+    dtype = torch.uint8
 
     def __init__(self, data: Tensor) -> None:
         self.shape = data.shape
         self.start, self.counts = self._from_binary(data)
 
-    def to_binary(self):
+    def to_binary(self, engine='C'):
+        if engine in ['auto', 'C'] and have_C_functions('mask_to_binary'):
+            return get_C_function('mask_to_binary')(self.shape[-1], self.start, self.counts)
+        # engine == python
         mask = torch.zeros(self.shape, dtype=torch.bool, device=self.start.device).flatten(0, -2)
         print(mask.shape)
         N = self.shape[-1]
@@ -67,10 +71,11 @@ class Mask:
         H, W = self.shape[-2:]
         assert other.shape[-2:] == self.shape[-2:]
         area = torch.zeros(list(self.shape[:-2]) + list(other.shape[:-2]), dtype=torch.float, device=self.start.device)
-        if engine in ['auto', 'c'] and have_C_functions('intersect'):
+        if engine in ['auto', 'C'] and have_C_functions('intersect'):
             get_C_function('intersect')(W, self.start, self.counts, other.start, other.counts, area)
             return area
         ## python engine
+        print('Use python engine, please try C engine for speed')
         area_ = area.view(self.start[..., 0].numel(), -1)
         sa = self.start.view(-1, H)
         sb = other.start.view(-1, H)
@@ -112,6 +117,21 @@ class Mask:
         inter = inter.view(area.numel(), -1)
         return (inter / (area + area_o - inter)).view(shape)
 
+    def cpu(self):
+        self.start = self.start.cpu()
+        self.counts = self.counts.cpu()
+        return self
+
+    def cuda(self):
+        self.start = self.start.cuda()
+        self.counts = self.counts.cuda()
+        return self
+
+    def to(self, device=None):
+        self.start = self.start.to(device=device)
+        self.counts = self.counts.to(device=device)
+        return self
+
 
 class Masks:
 
@@ -126,13 +146,19 @@ def test():
     print(a)
     print(a.shape)
     b = Mask(a)
-    print('cmp', (b.to_binary() == a).all())
+    assert (b.to_binary(engine='python') == a).all()
+    assert (b.to_binary(engine='C') == a).all()
     print('counts', b.counts)
     print('start', b.start)
     print(b.area.shape, b.area, a.sum())
-    print(b.intersect(b))
+    print('cpu:', b.intersect(b, engine='C'))
+    b.cuda()
+    assert (b.to_binary(engine='C').cpu() == a).all()
+    print('cuda:', b.intersect(b, engine='C'))
+    print('python:', b.intersect(b, engine='python'))
     print(b.In(b))
     print(b.IoU(b))
+
 
 if __name__ == '__main__':
     test()
