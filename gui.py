@@ -512,7 +512,7 @@ class TreeSegmentGUI(TreeSegment):
                 assert 0 <= mask_index.min() and mask_index.max() < self.tree2d.num_masks
                 masks = self.tree2d.masks[mask_index]
 
-        if masks is not None and masks.numel() > 0:
+        if masks is not None and len(masks) > 0:
             self._2d_mask = masks * torch.arange(1, 1 + masks.shape[0], device=masks.device)[:, None, None]
             self._2d_mask = torch.amax(self._2d_mask, dim=0).int().cpu().numpy()
             image = color_mask(self._2d_mask, masks.shape[0])
@@ -568,7 +568,7 @@ class TreeSegmentGUI(TreeSegment):
                     dpg.set_value('eye_y', self.view_3d.eye[1].item())
                     dpg.set_value('eye_z', self.view_3d.eye[2].item())
                 self.view_3d.update(False)
-            if True and self._need_update_2d:
+            if self._need_update_2d:
                 self.show_2d()
                 self._need_update_2d = False
             # now_size = dpg.get_item_width(view_3d._win_id), dpg.get_item_height(view_3d._win_id)
@@ -620,28 +620,23 @@ class TreeSegmentGUI(TreeSegment):
             y = np.clip(np.rint(points[:, 1] * self.tri_id.shape[0]), 0, self.tri_id.shape[0] - 1).astype(np.int32)
             points = points[self.tri_id.cpu().numpy()[y, x] > 0].reshape(-1, 2)
         self._points = points
-        self._labels = np.ones_like(points, dtype=bool)
+        self._labels = np.ones_like(points[..., 0], dtype=bool)
         self.view_2d.update(image_add_points(image, points, 3), resize=True)
         if not self.predictor.is_image_set:
             self.predictor.set_image(np.clip(self.image * 255, 0, 255).astype(np.uint8))
         self.mask_data = self.predictor.process_points(points)
-        self.tree2d.cat(self.mask_data)
-        self.tree2d.update_tree()
-        self.tree2d.remove_not_in_tree()
+        self.tree2d.insert_batch(self.mask_data)
+        # self.tree2d.update_tree()
+        # self.tree2d.remove_not_in_tree()
         self.levels_2d = self.tree2d.get_levels()
         self.show_tree_update()
 
     def run_tree_seg_2d_stage2(self):
-        # if not self.mask_data:
-        #     self.reset_2d()
-        # points, unfilled_mask = self.tree_2d.sample_unfilled(
-        #     dpg.get_value('points_per_update'), dpg.get_value('filled_threshold')
-        # )
         self.mask_data = None
         self.now_level_2d = 0
         points = self.tree2d.sample_by_counts(dpg.get_value('points_per_update'))
         self._points = points
-        self._labels = None if points is None else np.ones_like(points, dtype=bool)
+        self._labels = None if points is None else np.ones_like(points[..., 0], dtype=bool)
         if points is None:
             self.view_2d.update(self.image, resize=True)
             # print('ERROR: no unfilled mask')
@@ -651,9 +646,9 @@ class TreeSegmentGUI(TreeSegment):
         if not self.predictor.is_image_set:
             self.predictor.set_image(np.clip(self.image * 255, 0, 255).astype(np.uint8))
         self.mask_data = self.predictor.process_points(points)
-        self.tree2d.cat(self.mask_data)
-        self.tree2d.update_tree()
-        self.tree2d.remove_not_in_tree()
+        self.tree2d.insert_batch(self.mask_data)
+        # self.tree2d.update_tree()
+        # self.tree2d.remove_not_in_tree()
         self.levels_2d = self.tree2d.get_levels()
         self.show_tree_update()
         return True
@@ -662,15 +657,15 @@ class TreeSegmentGUI(TreeSegment):
         super().run_tree_seg_2d_post()
         self._need_update_2d = True
         # fast segment
-        save_path = self.image_dir.joinpath('../my_mask').joinpath(self.image_paths[self.image_index])
-        print(save_path)
-        save_path.parent.mkdir(exist_ok=True)
-        mask = self.tree2d.masks[0].cpu().numpy()
-        utils.save_image(save_path, mask)
-        self.change_image(next=True)
-        self.predictor.set_image((self.image * 255).astype(np.uint8))
-        self.switch_edit_mode()
-        self._need_update_2d = True
+        # save_path = self.image_dir.joinpath('../my_mask').joinpath(self.image_paths[self.image_index])
+        # print(save_path)
+        # save_path.parent.mkdir(exist_ok=True)
+        # mask = self.tree2d.masks[0].cpu().numpy()
+        # utils.save_image(save_path, mask)
+        # self.change_image(next=True)
+        # self.predictor.set_image((self.image * 255).astype(np.uint8))
+        # self.switch_edit_mode()
+        # self._need_update_2d = True
 
     def run_edit_2d(self):
         self._need_update_2d = True
@@ -1795,6 +1790,7 @@ def exit():
 
 
 if __name__ == '__main__':
+    torch.cuda.set_per_process_memory_fraction(0.7, 0)
     TreeSegmentGUI().run()
 
 # TODO: 标记3D模型转动状态, 并降低转动时的渲染分辨率, 以提高流畅性

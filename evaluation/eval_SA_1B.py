@@ -11,7 +11,7 @@ from rich.console import Console
 
 from evaluation.util import run_predictor, predictor_options, get_predictor
 from tree_segmentation import MaskData, Tree2D, TreeSegmentMetric
-from tree_segmentation.extension import utils
+from tree_segmentation.extension import utils, Masks
 
 
 def read_annotations(json_path: Path, image_size=None):

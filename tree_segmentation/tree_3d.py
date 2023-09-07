@@ -123,7 +123,8 @@ class TreeSegment:
                 in_threshold=self.get_value('in_threshold'),
                 in_thres_area=self.get_value('in_area_threshold'),
                 union_threshold=self.get_value('union_threshold'),
-                min_area=self.get_value('min_area'))
+                min_area=self.get_value('min_area'),
+                device=self.device)
         if self._tree_2d.masks is None and self.tri_id is not None:
             background = self.tri_id.eq(0)
             foreground = torch.logical_not(background)
@@ -134,8 +135,7 @@ class TreeSegment:
                 stability_score=torch.ones(2, device=self.tri_id.device) * 2,
                 boxes=torch.zeros((2, 4), device=self.tri_id.device),
             )
-            self._tree_2d.cat(mask_data)
-            self._tree_2d.update_tree()
+            self._tree_2d.insert_batch(mask_data)
         return self._tree_2d
 
     @property
@@ -299,35 +299,37 @@ class TreeSegment:
         return image
 
     def run_tree_seg_2d_stage1(self):
-        if not self.mask_data:
-            self.reset_2d()
-        points = self.tree2d.sample_grid(self.get_value('points_per_side'))
+        self.mask_data = None
+        points = self.tree2d.sample_grid(self.get_value('points_per_side', 32))
         # filter points in background
-        x = np.clip(np.rint(points[:, 0] * self.tri_id.shape[1]), 0, self.tri_id.shape[1] - 1).astype(np.int32)
-        y = np.clip(np.rint(points[:, 1] * self.tri_id.shape[0]), 0, self.tri_id.shape[0] - 1).astype(np.int32)
-        self.points = points[self.tri_id.cpu().numpy()[y, x] > 0].reshape(-1, 2)
+        if self.tri_id is not None:
+            x = np.clip(np.rint(points[:, 0] * self.tri_id.shape[1]), 0, self.tri_id.shape[1] - 1).astype(np.int32)
+            y = np.clip(np.rint(points[:, 1] * self.tri_id.shape[0]), 0, self.tri_id.shape[0] - 1).astype(np.int32)
+            self.points = points[self.tri_id.cpu().numpy()[y, x] > 0].reshape(-1, 2)
+        else:
+            self.points = points
         # process points
+        if not self.predictor.is_image_set:
+            self.predictor.set_image(np.clip(self.image * 255, 0, 255).astype(np.uint8))
         self.mask_data = self.predictor.process_points(self.points)
         # dpg.get_item_callback('level0')()
-        self.tree2d.cat(self.mask_data)
-        self.tree2d.update_tree()
-        self.tree2d.remove_not_in_tree()
+        self.tree2d.insert_batch(self.mask_data)
+        # self.tree2d.update_tree()
+        # self.tree2d.remove_not_in_tree()
         self.levels_2d = self.tree2d.get_levels()
 
     def run_tree_seg_2d_stage2(self):
-        if not self.mask_data:
-            self.reset_2d()
-        # points, unfilled_mask = self.tree_2d.sample_unfilled(
-        #     dpg.get_value('points_per_update'), dpg.get_value('filled_threshold')
-        # )
-        self.points = self.tree2d.sample_by_counts(self.get_value('points_per_update'))
-        if self.points is None:
+        self.mask_data = None
+        self.points = self.tree2d.sample_by_counts(self.get_value('points_per_update', 256))
+        if self.points is None or self.points.size == 0:
             print(f'[Tree 2D] Update complete')
             return False
+        if not self.predictor.is_image_set:
+            self.predictor.set_image(np.clip(self.image * 255, 0, 255).astype(np.uint8))
         self.mask_data = self.predictor.process_points(self.points)
-        self.tree2d.cat(self.mask_data)
-        self.tree2d.update_tree()
-        self.tree2d.remove_not_in_tree()
+        self.tree2d.insert_batch(self.mask_data)
+        # self.tree2d.update_tree()
+        # self.tree2d.remove_not_in_tree()
         self.levels_2d = self.tree2d.get_levels()
         return True
 
@@ -338,7 +340,7 @@ class TreeSegment:
         for step in range(max_steps):
             if not self.run_tree_seg_2d_stage2():
                 break
-            print(f'[Tree 2D]: autorun stage1 {step + 1}/{max_steps}')
+            print(f'[Tree 2D]: autorun stage2 {step + 1}/{max_steps}')
 
     def run_tree_seg_2d_post(self):
         if self._tree_2d is not None:
