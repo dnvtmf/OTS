@@ -4,6 +4,7 @@ import shutil
 import time
 from pathlib import Path
 from typing import Optional, Union
+import seaborn as sns
 
 import cv2
 import gradio as gr
@@ -14,6 +15,7 @@ from segment_anything.build_sam import Sam
 from semantic_sam import SemanticSAM
 from tree_segmentation.extension import utils
 from tree_segmentation.tree_3d import TreeSegment
+from tree_segmentation import Tree3Dv2
 from tree_segmentation.util import get_colored_masks
 
 
@@ -30,7 +32,8 @@ class WebUI(TreeSegment):
         with gr.Blocks() as tree_seg_2d_block:
             self.build_tree_seg_2d_ui()
 
-        tree_seg_3d_block = gr.Button('B')
+        with gr.Blocks() as tree_seg_3d_block:
+            self.build_tree_seg_3d_ui()
 
         with gr.Blocks() as option_block:
             self.build_options()
@@ -233,6 +236,56 @@ class WebUI(TreeSegment):
         stage2_btn.click(self.run_tree_seg_2d_stage2, outputs=self.img_levels)
         post_btn.click(self.run_tree_seg_2d_post, outputs=self.img_levels)
         autorun_btn.click(self.autorun_tree_seg_2d, outputs=self.img_levels)
+
+    def get_mesh_path(self, mesh_path=None):
+        # mesh_path = Path('~/data/meshes/winter_scene/low_poly_winter_scene.glb').expanduser()
+        if mesh_path is None:
+            mesh_path = Path('./results/Replica/room_1/simplify.ply')
+        self.mesh_path = mesh_path
+        print(self.mesh)
+        if mesh_path.suffix != '.glb':
+            mesh_path = mesh_path.with_suffix('.glb')
+            utils.save_glb(mesh_path, self.mesh)
+        assert mesh_path.is_file()
+        return mesh_path
+
+    def load_tree_seg_3d(self):
+        if self._mesh is None:
+            return
+        self._tree_3d = Tree3Dv2(self.mesh, self.device)
+        self.tree3d.load(Path('./results/Replica/room_1/n10000.tree3dv2'))
+        self.levels_3d = self.tree3d.get_levels()
+        restuls = []
+        for i in range(len(self.seg3d_levels)):
+            if i + 1 < len(self.levels_3d):
+                mesh_path = self.mesh_path.with_name(f"{self.mesh_path.stem}_l{i+1}.glb")
+                if not mesh_path.exists():
+                    mesh_l = self.mesh.clone()
+                    seg_l = self.tree3d.masks[self.levels_3d[i + 1] - 1, 1:]
+                    if mesh_l.v_clr is None:
+                        mesh_l.v_clr = torch.full(mesh_l.v_pos.shape, 0, dtype=torch.float, device=self.device)
+                    else:
+                        mesh_l.v_clr = mesh_l.v_clr[..., :3]
+                    colors = torch.from_numpy(np.array(sns.color_palette(n_colors=len(seg_l)))).to(mesh_l.v_clr)
+                    face_colors = mesh_l.v_clr[mesh_l.f_pos].mean(dim=1)
+                    for j in range(len(seg_l)):
+                        face_colors[seg_l[j], :] = colors[j]
+                    face_colors = face_colors[:, None, :].expand(face_colors.shape[0], 3, 3).reshape(-1, 3)
+                    mesh_l.v_clr.index_reduce_(0, mesh_l.f_pos.view(-1).long(), face_colors, 'mean', include_self=False)
+                    utils.save_glb(mesh_path, mesh_l)
+                restuls.append(self.seg3d_levels[i].update(mesh_path, visible=True))
+            else:
+                restuls.append(self.seg3d_levels[i].update(value=None, visible=False))
+        return restuls
+
+    def build_tree_seg_3d_ui(self):
+        self.view_3d = gr.Model3D()
+        with gr.Row():
+            self.load_3d = gr.Button('Load example')
+            self.run_3d = gr.Button('Run')
+        self.load_3d.click(self.get_mesh_path, self.view_3d, self.view_3d)
+        self.seg3d_levels = [gr.Model3D(label=f"level {i}", visible=False) for i in range(10)]
+        self.run_3d.click(self.load_tree_seg_3d, outputs=self.seg3d_levels)
 
 
 if __name__ == "__main__":

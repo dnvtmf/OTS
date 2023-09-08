@@ -54,8 +54,122 @@ Tensor mask_to_binary(int W, Tensor& start, Tensor& counts) {
   return out;
 }
 
-template <typename T = int32_t>
-__global__ void mask_from_binary();
+__global__ void mask_from_binary_kernel_1(int N, int W, const bool* __restrict__ masks, int* __restrict__ start) {
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  masks += x * W;
+  if (x < N) {
+    bool now = 0;
+    int cnt  = 0;
+    int num  = 0;
+    for (int i = 0; i < W; ++i, masks++) {
+      if (now == *masks)
+        ++cnt;
+      else {
+        num += (cnt - 1) / 255 * 2 + 1;
+        now ^= 1;
+        cnt = 1;
+      }
+    }
+    num += (cnt - 1) / 255 * 2 + 1 + now;
+    start[x] = num;
+  }
+}
+
+__global__ void mask_from_binary_kernel_2(
+    int N, int W, const bool* __restrict__ masks, const int* __restrict__ start, uint8_t* __restrict__ counts) {
+  const int x = blockIdx.x * blockDim.x + threadIdx.x;
+  masks += x * W;
+  // auto check = counts + start[x + 1 < N ? x + 1 : 0];
+  counts += start[x];
+  if (x < N) {
+    bool now = 0;
+    int cnt  = 0;
+    int num  = 0;
+    for (int i = 0; i < W; ++i, masks++) {
+      if (now == *masks)
+        ++cnt;
+      else {
+        while (cnt > 255) {
+          *(counts++) = 255;
+          *(counts++) = 0;
+          cnt -= 255;
+        }
+        *(counts++) = cnt;
+        now ^= 1;
+        cnt = 1;
+      }
+    }
+    while (cnt > 255) {
+      *(counts++) = 255;
+      *(counts++) = 0;
+      cnt -= 255;
+    }
+    *(counts++) = cnt;
+    if (now) *(counts++) = 0;
+    // DEBUG
+    // printf("x=%d, num right: %d", x, counts == check);
+    // if (x + 1 < N) assert(counts == check);
+  }
+}
+
+vector<Tensor> mask_from_binary(Tensor& masks) {
+  CHECK_CONTIGUOUS(masks);
+  BCNN_ASSERT(masks.ndimension() >= 2 && masks.scalar_type() == torch::kBool, "Error shape or dtype for masks");
+  const int W = masks.size(-1);
+  const int N = masks.numel() / W;
+  Tensor start, counts;
+  auto* ptr = masks.data_ptr<bool>();
+  if (masks.is_cuda()) {
+    auto shape = masks.sizes().vec();
+    shape.pop_back();
+    start = torch::zeros(N, masks.options().dtype(torch::kInt32));
+    if (N > 0) {
+      mask_from_binary_kernel_1 KERNEL_ARG((N + 255) / 256, 256)(N, W, ptr, start.data<int32_t>());
+      CHECK_CUDA_ERROR("mask_from_binary_kernel_1");
+    }
+    int M  = start.sum().item<int>();
+    start  = torch::cumsum(start, 0, torch::kInt32) - start;
+    counts = torch::zeros(M, masks.options().dtype(torch::kUInt8));
+    if (N > 0) {
+      mask_from_binary_kernel_2 KERNEL_ARG((N + 255) / 256, 256)(
+          N, W, ptr, start.data_ptr<int32_t>(), counts.data<uint8_t>());
+      CHECK_CUDA_ERROR("mask_from_binary_kernel_2");
+    }
+    start = start.view(shape);
+  } else {
+    vector<int> s;
+    vector<uint8_t> c;
+    for (int i = 0; i < N; ++i) {
+      s.push_back(c.size());
+      bool now = 0;
+      int cnt  = 0;
+      for (int j = 0; j < W; ++j, ptr++) {
+        if (now == *ptr)
+          cnt++;
+        else {
+          while (cnt > 255) {
+            c.push_back(255);
+            c.push_back(0);
+            cnt -= 255;
+          }
+          c.push_back(cnt);
+          now = *ptr;
+          cnt = 1;
+        }
+      }
+      while (cnt > 255) {
+        c.push_back(255);
+        c.push_back(0);
+        cnt -= 255;
+      }
+      c.push_back(cnt);
+      if (now) c.push_back(0);
+    }
+    start  = torch::tensor(s, torch::kInt32);
+    counts = torch::tensor(c, torch::kUInt8);
+  }
+  return {start, counts};
+}
 
 template <typename T = int32_t>
 __global__ void intersect_cuda(int N, int M, int H, int W, const int32_t* __restrict__ a_start,
@@ -133,5 +247,6 @@ void intersect(int W, Tensor& a_start, Tensor& a_counts, Tensor& b_start, Tensor
 }  // namespace tree_seg
 REGIST_PYTORCH_EXTENSION(tree_seg_mask, {
   m.def("mask_to_binary", &tree_seg::mask_to_binary, "mask_to_binary");
+  m.def("mask_from_binary", &tree_seg::mask_from_binary, "mask_from_binary");
   m.def("intersect", &tree_seg::intersect, "intersect");
 });

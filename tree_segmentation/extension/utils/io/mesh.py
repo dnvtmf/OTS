@@ -9,7 +9,8 @@ from torch import Tensor
 from .material import load_mtl, MTL
 
 __all__ = [
-    'load_mesh', 'load_obj', 'load_ply', 'save_mesh', 'save_off', 'save_obj', 'save_ply', 'mesh_extensions', 'parse_ply'
+    'load_mesh', 'load_obj', 'load_ply', 'save_mesh', 'save_off', 'save_obj', 'save_ply', 'save_glb', 'mesh_extensions',
+    'parse_ply'
 ]
 
 mesh_extensions = ['.obj', '.off', '.ply']
@@ -467,3 +468,16 @@ def save_off(filename, vertices, triangles):
 
         for f in triangles:
             fh.write("3 {} {} {}\n".format(*f))
+
+
+def save_glb(filename, *args):
+    from tree_segmentation.extension.structures import Mesh
+    import open3d as o3d
+    from tree_segmentation.extension.utils.open3d_utils import to_open3d_type
+    assert len(args) == 1
+    mesh = args[0]
+    assert isinstance(mesh, Mesh)
+    o3d_mesh = o3d.geometry.TriangleMesh(to_open3d_type(mesh.v_pos.double()), to_open3d_type(mesh.f_pos.int()))
+    if mesh.v_clr is not None:
+        o3d_mesh.vertex_colors = to_open3d_type(mesh.v_clr[..., :3].double())
+    o3d.io.write_triangle_mesh(str(filename), o3d_mesh)

@@ -27,7 +27,7 @@ def read_annotations(json_path: Path, image_size=None):
             mask = cv2.resize(mask, image_size, interpolation=cv2.INTER_NEAREST)
         masks.append(mask)
     scores = np.stack(scores)
-    masks = np.stack(masks)
+    masks = np.stack(masks).astype(np.bool_)
     tree2d = Tree2D(MaskData(masks=torch.from_numpy(masks), iou_preds=torch.from_numpy(scores)), min_area=0)
     tree2d.update_tree()
     return tree2d

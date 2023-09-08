@@ -108,7 +108,13 @@ class Masks:
         if self._format == self.ENCODED:
             return self
         assert self._format == self.BINARY
-        assert engine in ['python', 'auto']
+        assert engine in ['python', 'auto', 'C']
+        if engine != 'python':
+            self._shape = self.data.shape
+            self.start, self.data = get_C_function('mask_from_binary')(self.data)
+            self.start = self.start.view(self._shape[:-1])
+            self._format = self.ENCODED
+            return self
         data = self.data
         N = data.shape[-1]
         self._shape = data.shape
@@ -141,7 +147,7 @@ class Masks:
 
     @property
     def area(self):
-        assert self._area is None or self._area.shape == self._shape[:-2]
+        assert self._area is None or self._area.shape == self.shape[:-2]
         if self._area is not None:
             return self._area
         if self._format == self.BINARY:
@@ -239,12 +245,12 @@ class Masks:
             self._area = self._area.cuda()
         return self
 
-    def to(self, device=None):
+    def to(self, device=None, **kwargs):
         if self.start is not None:
-            self.start = self.start.to(device=device)
-        self.data = self.data.to(device=device)
+            self.start = self.start.to(device=device, **kwargs)
+        self.data = self.data.to(device=device, **kwargs)
         if self._area is not None:
-            self._area = self._area.to(device=device)
+            self._area = self._area.to(device=device, **kwargs)
         return self
 
     def cat(self, other: 'Masks'):
@@ -422,7 +428,7 @@ class Masks:
                     W -= 255
                 new_data.append(W)
             N = after * self.start[0].numel()
-            new_data = self.data.new_tensor([new_data]).expand(N, -1)
+            new_data = self.data.new_tensor([new_data]).expand(N, -1).contiguous()
             new_start = torch.arange(N).to(self.start) * new_data.shape[-1] + len(self.data)
             shape = [self._shape[0] + after] + list(self._shape[1:])
             start = torch.cat([self.start.view(-1), new_start], dim=0).view(shape[:-1])
@@ -443,9 +449,19 @@ def test():
         dtype=torch.bool)
     print(a.int())
     print(a.shape)
-    b = Masks(a, format=Masks.ENCODED)
+    d = Masks(a, format=Masks.BINARY)
+    b = d.encode(engine='python')
     print(b)
-    d = b.binary()
+    f = d.encode(engine='C')
+    print(b.shape, f.shape)
+    print(b.start, f.start)
+    print(b.data, f.data)
+    assert (b.shape == f.shape and b.start.eq(f.start).all() and b.data.eq(f.data).all())
+    assert (d.data.eq(f.binary().data).all())
+    e = d.cuda().encode(engine='C').cpu()
+    d.cpu()
+    assert (b.shape == e.shape and b.start.eq(e.start).all() and b.data.eq(e.data).all())
+    assert (d.data.eq(e.binary().data).all())
 
     print(b.binary())
     ## test binary
