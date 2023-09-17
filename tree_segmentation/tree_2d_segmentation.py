@@ -225,16 +225,16 @@ class TreeStructure:
 class Tree2D(TreeStructure):
 
     def __init__(
-        self,
-        masks: Union[MaskData, Tensor, 'Tree2D', Masks] = None,
-        scores: Tensor = None,
-        in_threshold=0.8,
-        union_threshold=0.1,
-        min_area=100,
-        in_thres_area=10,
-        device=None,
-        verbose=0,
-        format=Masks.ENCODED,
+      self,
+      masks: Union[MaskData, Tensor, 'Tree2D', Masks] = None,
+      scores: Tensor = None,
+      in_threshold=0.8,
+      union_threshold=0.1,
+      min_area=100,
+      in_thres_area=10,
+      device=None,
+      verbose=0,
+      format=Masks.ENCODED,
     ) -> None:
         self._is_compressed = False
         self.in_threshold = in_threshold
@@ -718,7 +718,7 @@ class Tree2D(TreeStructure):
         return self
 
     @property
-    def masks(self) -> Optional[Masks]:
+    def masks(self) -> Optional[Tensor]:
         if self._masks is None:
             return None
         else:

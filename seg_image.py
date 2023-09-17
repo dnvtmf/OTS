@@ -5,6 +5,7 @@ import numpy as np
 import seaborn as sns
 import torch.cuda
 from PIL import Image
+from tqdm import tqdm
 
 from segment_anything import build_sam
 from semantic_sam import semantic_sam_l, semantic_sam_t
@@ -45,16 +46,7 @@ def options():
     return args
 
 
-def main():
-    args = options()
-    save_dir = Path(args.output).expanduser()
-    assert save_dir.is_dir(), f"The output directory '{save_dir}' is not exists"
-
-    image_path = Path(args.image).expanduser()
-    assert image_path.exists(), f"Image {image_path} not exist"
-    assert image_path.suffix in utils.image_extensions, f"File {image_path} not a image"
-    image = utils.load_image(image_path)
-
+def load_predictor(args):
     model_dir = Path(args.weights).expanduser()
     if args.segment_anything:
         assert model_dir.joinpath('sam_vit_h_4b8939.pth').exists(), f"Not model 'sam_vit_h_4b8939.pth' in {model_dir}"
@@ -85,6 +77,12 @@ def main():
         box_nms_thresh=args.box_nms_thresh,
         image_size=args.image_size)
     print('build predictor')
+    return predictor, device
+
+
+def deal_one_image(args, predictor: TreePredictor, device, image_path: Path, save_dir: Path):
+    image = utils.load_image(image_path)[..., :3]
+    # print('image:', image.shape)
 
     results = predictor.tree_generate(
         image=image,
@@ -97,16 +95,16 @@ def main():
         union_threshold=args.union_threshold,
         device=device)
     results.post_process()
-    results.print_tree()
+    # results.print_tree()
 
     if args.format == '.tree2d':
         results.save(save_dir.joinpath(image_path.stem + '.tree2d'))
     elif args.format == '.tiff':
-        masks = results.data['masks'].cpu().numpy()
-        print(masks.shape, masks.dtype)
+        masks = results.masks.cpu().numpy()
+        # print(masks.shape, masks.dtype)
         utils.save_image(save_dir.joinpath(image_path.stem + '.tiff'), masks)
     else:
-        masks = results.data['masks'].cpu().numpy()
+        masks = results.masks.cpu().numpy()
         for i in range(len(masks)):
             mask = np.zeros_like(masks[i], dtype=np.uint8)
             instances = np.unique(masks[i])
@@ -119,6 +117,24 @@ def main():
             mask_i = Image.fromarray(mask, mode='P')
             mask_i.putpalette((colors * 255).astype(np.uint8))
             mask_i.save(save_dir.joinpath(f'{image_path.stem}_level_{i + 1}.png'))
+
+
+def main():
+    args = options()
+    save_dir = Path(args.output).expanduser()
+    assert save_dir.is_dir(), f"The output directory '{save_dir}' is not exists"
+
+    image_path = Path(args.image).expanduser()
+    assert image_path.exists(), f"Image {image_path} not exist"
+    predictor, device = load_predictor(args)
+
+    if image_path.is_dir():
+        for img_path in tqdm(list(image_path.glob('*.*'))):
+            if img_path.suffix in utils.image_extensions:
+                deal_one_image(args, predictor, device, img_path, save_dir)
+    else:
+        assert image_path.suffix in utils.image_extensions, f"File {image_path} not a image"
+        deal_one_image(args, predictor, device, image_path, save_dir)
     print('Complete')
 
 

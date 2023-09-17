@@ -38,7 +38,7 @@ class WebUI(TreeSegment):
         with gr.Blocks() as option_block:
             self.build_options()
         self.web_ui = gr.TabbedInterface([tree_seg_2d_block, tree_seg_3d_block, option_block],
-                                         ["2D Tree Segmentation", "3D Tree Segmentation", "Options"])
+            ["2D Tree Segmentation", "3D Tree Segmentation", "Options"])
 
     def run(self):
         self.web_ui.launch(share=False, server_name='0.0.0.0')
@@ -107,7 +107,6 @@ class WebUI(TreeSegment):
         return self.image
 
     def build_options(self):
-
         def add_option(name, default, **kwargs):
             x = gr.Number(default, label=name, interactive=True, **kwargs)
             x.change(self.set_value(name, default), x)
@@ -115,8 +114,8 @@ class WebUI(TreeSegment):
         with gr.Group():
             gr.Markdown('Segment Options')
             r_model_type = gr.Radio(["SAM", "SAM-L", "SAM-B", "Semantic-SAM-L", "Semantic-SAM-T"],
-                                    label='Base Model',
-                                    value=self._model_type)
+                label='Base Model',
+                value=self._model_type)
             with gr.Row():
                 add_option('points_per_batch', 64, precision=0)
                 add_option('stability_score_thresh', 0.95)
@@ -204,7 +203,6 @@ class WebUI(TreeSegment):
         return self.update_2d_results()
 
     def build_tree_seg_2d_ui(self):
-
         with gr.Row():
             image_select_btn = gr.Button('Select Image')
             image_upload_btn = gr.UploadButton('Upload Image', file_types=['image'], type='file', file_count='multiple')
@@ -258,7 +256,7 @@ class WebUI(TreeSegment):
         restuls = []
         for i in range(len(self.seg3d_levels)):
             if i + 1 < len(self.levels_3d):
-                mesh_path = self.mesh_path.with_name(f"{self.mesh_path.stem}_l{i+1}.glb")
+                mesh_path = self.mesh_path.with_name(f"{self.mesh_path.stem}_l{i + 1}.glb")
                 if not mesh_path.exists():
                     mesh_l = self.mesh.clone()
                     seg_l = self.tree3d.masks[self.levels_3d[i + 1] - 1, 1:]
