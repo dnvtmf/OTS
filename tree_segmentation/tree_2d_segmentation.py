@@ -347,9 +347,9 @@ class Tree2D(TreeStructure):
         if len(idx_) > 0:
             assert 0 <= idx_.min() and idx_.max() < len(self._masks)
             assert len(self._masks) == len(self.scores)
-        num = len(idx_)
-        self._masks[:num] = self._masks[idx_]
-        self.scores[:num] = self.scores[idx_]
+            num = len(idx_)
+            self._masks[:num] = self._masks[idx_]
+            self.scores[:num] = self.scores[idx_]
         return indices, new_indices
 
     def node_replace(self, i, j):

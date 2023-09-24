@@ -1,22 +1,19 @@
 import os
-import random
-import shutil
-import time
 from pathlib import Path
-from typing import Optional, Union
-import seaborn as sns
+from typing import Union
 
 import cv2
 import gradio as gr
 import numpy as np
+import seaborn as sns
 import torch
 
 from segment_anything.build_sam import Sam
 from semantic_sam import SemanticSAM
+from tree_segmentation import Tree3Dv2
 from tree_segmentation.extension import utils
 from tree_segmentation.tree_3d import TreeSegment
-from tree_segmentation import Tree3Dv2
-from tree_segmentation.util import get_colored_masks
+from tree_segmentation.util import get_colored_masks, search_folder, get_hash_name
 
 
 class WebUI(TreeSegment):
@@ -25,9 +22,16 @@ class WebUI(TreeSegment):
         super().__init__(args, model)
         self._model_type = 'Semantic-SAM-T'
         self.cfg = {}
-        self.image_dir = Path('./images').expanduser()
+        self.image_dir = Path(__file__).parent.joinpath('images').expanduser()
         self.image_index = 0
         self.image_paths = []
+
+        self.mesh_dir = Path(__file__).parent.joinpath('meshes').expanduser()
+        self.mesh_index = 0
+        self.mesh_paths = []
+
+        self.cache_web = self.cache_root.joinpath('web_cache')
+        self.cache_web.mkdir(exist_ok=True)
 
         with gr.Blocks() as tree_seg_2d_block:
             self.build_tree_seg_2d_ui()
@@ -154,28 +158,34 @@ class WebUI(TreeSegment):
                 alpha = self.get_value('alpha', 0.3)
                 if self.image.dtype == np.uint8:
                     image = (image * 255).astype(np.uint8)
-                image = cv2.addWeighted(self.image, alpha, image[..., :3], 1 - alpha, 0)
+                image = cv2.addWeighted(self.image[..., :3], alpha, image[..., :3], 1 - alpha, 0)
                 data.append(self.img_levels[i].update(image, visible=True, width=image.shape[1]))
             else:
-                data.append(self.img_levels[i].update(value=None, visible=False))
+                data.append(self.img_levels[i].update(value=None, visible=i == 0))
         return data
 
     def reset_2d(self):
         super().reset_2d()
         return self.update_2d_results()
 
-    def autorun_tree_seg_2d(self, *args, **kwargs):
+    def autorun_tree_seg_2d(self, *args, progress=gr.Progress(), **kwargs):
         if self._image is None:
             print(f'[Web] autorun_tree_seg_2d no image')
             return
+        progress(0, desc="Grid Sample Stage")
         super().run_tree_seg_2d_stage1()
         print('[Tree 2D]: autorun stage1')
         max_steps = self.get_value('max_steps', 100)
+        progress(0.1, desc="Heuristic Sample Stage")
         for step in range(max_steps):
             if not super().run_tree_seg_2d_stage2():
                 break
+            progress((step + 2) / (max_steps + 2), desc="Heuristic Sample Stage")
             print(f'[Tree 2D]: autorun stage2 {step + 1}/{max_steps}')
         print(f"[Web] complete autorun_tree_seg_2d")
+        progress((max_steps + 1) / (max_steps + 2), desc="Post Process")
+        # self.run_tree_seg_2d_post() # TODO: have bug
+        progress(1., desc="Completed")
         return self.update_2d_results()
 
     def run_tree_seg_2d_stage1(self):
@@ -204,7 +214,7 @@ class WebUI(TreeSegment):
 
     def build_tree_seg_2d_ui(self):
         with gr.Row():
-            image_select_btn = gr.Button('Select Image')
+            image_select_btn = gr.Button('Image Gallery')
             image_upload_btn = gr.UploadButton('Upload Image', file_types=['image'], type='file', file_count='multiple')
 
         self.gallery = gr.Gallery(
@@ -223,11 +233,11 @@ class WebUI(TreeSegment):
 
         with gr.Row():
             reset_btn = gr.Button('Reset')
-            stage1_btn = gr.Button('Stage 1')
-            stage2_btn = gr.Button('Stage 2')
+            stage1_btn = gr.Button('Grid Sample')
+            stage2_btn = gr.Button('Heuristic Sample')
             post_btn = gr.Button('Post Process')
             autorun_btn = gr.Button('Auto Run')
-        self.img_levels = [gr.Image(label=f"level {i}", interactive=False, visible=False) for i in range(10)]
+        self.img_levels = [gr.Image(label=f"level {i}", interactive=False, visible=i == 0) for i in range(10)]
 
         reset_btn.click(self.reset_2d, outputs=self.img_levels)
         stage1_btn.click(self.run_tree_seg_2d_stage1, outputs=self.img_levels)
@@ -235,15 +245,18 @@ class WebUI(TreeSegment):
         post_btn.click(self.run_tree_seg_2d_post, outputs=self.img_levels)
         autorun_btn.click(self.autorun_tree_seg_2d, outputs=self.img_levels)
 
-    def get_mesh_path(self, mesh_path=None):
-        # mesh_path = Path('~/data/meshes/winter_scene/low_poly_winter_scene.glb').expanduser()
-        if mesh_path is None:
-            mesh_path = Path('./results/Replica/room_1/simplify.ply')
+    def change_mesh(self, *args, **kwargs):
+        self.mesh_index = args[0]
+        mesh_path = self.mesh_dir.joinpath(self.mesh_paths[self.mesh_index])
         self.mesh_path = mesh_path
-        print(self.mesh)
-        if mesh_path.suffix != '.glb':
-            mesh_path = mesh_path.with_suffix('.glb')
-            utils.save_glb(mesh_path, self.mesh)
+        self._mesh = None
+        print(f"[Web] change mesh to {self.mesh_path}")
+        if self.mesh_path.suffix != '.glb':
+            name = self.mesh_paths[self.mesh_index].replace('/', '_')
+            mesh_path = self.cache_web.joinpath(name).with_suffix('.glb')
+            if not mesh_path.exists():
+                utils.save_glb(mesh_path, self.mesh)
+                print(f"Web: convert to glb formart, save to {mesh_path}")
         assert mesh_path.is_file()
         return mesh_path
 
@@ -277,11 +290,25 @@ class WebUI(TreeSegment):
         return restuls
 
     def build_tree_seg_3d_ui(self):
-        self.view_3d = gr.Model3D()
+        self.mesh_paths = search_folder(self.mesh_dir, utils.mesh_extensions)
+        n = len(self.mesh_dir.parts)
+        self.mesh_paths = [Path(*path.parts[n:]).as_posix() for path in self.mesh_paths]
+        self.change_mesh_ui = gr.Dropdown(
+            choices=self.mesh_paths,
+            value=self.mesh_paths[0] if len(self.mesh_paths) > 0 else None,
+            type="index",
+            multiselect=False,
+            allow_custom_value=False,
+            interactive=True,
+            label='examples',
+        )
+        print(self.mesh_paths)
+        self.view_3d = gr.Model3D(clear_color=(0., 0., 0., 0.))
+        self.change_mesh_ui.select(self.change_mesh, self.change_mesh_ui, self.view_3d)
         with gr.Row():
-            self.load_3d = gr.Button('Load example')
+            # self.load_3d = gr.Button('Load example')
             self.run_3d = gr.Button('Run')
-        self.load_3d.click(self.get_mesh_path, self.view_3d, self.view_3d)
+        # self.load_3d.click(self.get_mesh_path, self.view_3d, self.view_3d)
         self.seg3d_levels = [gr.Model3D(label=f"level {i}", visible=False) for i in range(10)]
         self.run_3d.click(self.load_tree_seg_3d, outputs=self.seg3d_levels)
 

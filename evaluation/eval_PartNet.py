@@ -5,6 +5,7 @@ import multiprocessing as mp
 import os
 import time
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import nvdiffrast.torch as dr
@@ -98,14 +99,16 @@ def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path, device):
     return mesh, gt_v2
 
 
-def get_images_best_view(glctx,
-                         mesh: Mesh,
-                         image_size=1024,
-                         num_views=100,
-                         num_split=10,
-                         seed=0,
-                         fovy=60,
-                         more_ratio=10):
+def get_images_best_view(
+  glctx,
+  mesh: Mesh,
+  image_size=1024,
+  num_views=100,
+  num_split=10,
+  seed=0,
+  fovy=60,
+  more_ratio=10
+):
     if seed > 0:
         torch.manual_seed(seed)
     device = mesh.v_pos.device
@@ -171,7 +174,7 @@ def load_images(glctx, mesh: Mesh, image_dir: Path, num_views=1, fovy=60, num_sp
         image = utils.load_image(image_dir.joinpath(filename_fmt.format(i)))  # type: np.ndarray
         image = torch.from_numpy(image.copy()).float() / 255.
         images.append(image)
-    images = torch.stack(images)  #NxHxWx3
+    images = torch.stack(images)  # NxHxWx3
     image_size = (images.shape[2], images.shape[1])  # W, H
     Tv2c = ops_3d.perspective(fovy=math.radians(fovy), size=image_size, device=device)
     Tw2c = Tv2c @ Tw2vs.to(device)
@@ -225,14 +228,14 @@ def build_view_graph(area, tri_ids: Tensor, threshold=0.5, num_nearest=5):
 
 
 def run_fast_2d_semgentation(
-    cache_dir: Path,
-    mesh: Mesh,
-    images: Tensor,
-    tri_ids: Tensor,
-    Tw2vs: Tensor,
-    num_points=10,
-    steps=10,
-    predictor: TreePredictor = None,
+  cache_dir: Path,
+  mesh: Mesh,
+  images: Tensor,
+  tri_ids: Tensor,
+  Tw2vs: Tensor,
+  num_points=10,
+  steps=10,
+  predictor: TreePredictor = None,
 ):
     device = mesh.v_pos.device
     if predictor is None:
@@ -246,6 +249,7 @@ def run_fast_2d_semgentation(
     images = (images[:, :, :, :3] * 255).to(torch.uint8).cpu().numpy()
     _, H, W, _ = images.shape
     # first stage
+    tree2d = Tree2D()
     for i in range(N):
         predictor.set_image(images[i])
         features.append(utils.tensor_to(predictor.features, device=torch.device('cpu')))
@@ -273,7 +277,6 @@ def run_fast_2d_semgentation(
             for j in range(N):
                 if i == j or A[i, j] <= 0:
                     continue
-                results[j]
                 masks = results[j].masks
                 for l, x in enumerate(results[j].get_levels()):
                     if l == 0:
@@ -309,22 +312,22 @@ def run_fast_2d_semgentation(
 
 @torch.no_grad()
 def eval_one(
-    args,
-    glctx: dr.RasterizeCudaContext,
-    device,
-    shape_root: Path,
-    cache_root: Path,
-    num_views=100,
-    epochs_ea=3000,
-    epochs_run=5000,
-    print=print,
+  args,
+  glctx: dr.RasterizeCudaContext,
+  device,
+  shape_root: Path,
+  cache_root: Path,
+  num_views=100,
+  epochs_ea=3000,
+  epochs_run=5000,
+  print: Any = print,
 ):
     print(f"Shape Dir", shape_root)
     cache_dir = cache_root.joinpath(f"{shape_root.name}")
     cache_dir.mkdir(exist_ok=True)
     print('Cache Dir:', cache_dir)
     image_dir = cache_dir.joinpath('images')
-    image_dir.mkdir(exist_ok=Tree)
+    image_dir.mkdir(exist_ok=True)
 
     if 1 and cache_dir.joinpath('gt.tree3dv2').exists():
         mesh = torch.load(cache_dir.joinpath(shape_root.stem + '.mesh_cache'), map_location=device)
@@ -435,13 +438,13 @@ def eval_one(
 
 
 def run_many(
-    args,
-    shapes,
-    data_root: Path,
-    cache_root: Path,
-    gpu_id=0,
-    que: mp.Queue = None,
-    metric: TreeSegmentMetric = None,
+  args,
+  shapes,
+  data_root: Path,
+  cache_root: Path,
+  gpu_id=0,
+  que: mp.Queue = None,
+  metric: TreeSegmentMetric = None,
 ):
     global console
     if console is None:
@@ -476,7 +479,7 @@ def run_many(
             torch.cuda.empty_cache()
             if que is not None:
                 que.put(None)
-            # exit(1)
+            exit(1)
         if metric is not None:
             console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
 

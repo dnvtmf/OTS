@@ -35,9 +35,11 @@ Tensor mask_to_binary(int W, Tensor& start, Tensor& counts) {
   BCNN_ASSERT(start.scalar_type() == at::kInt, "start must be int32");
   DISPATCH_MY_TYPES(counts.type(), "mask_to_binary", [&] {
     if (start.is_cuda()) {
-      mask_to_binary_kernel<scalar_t> KERNEL_ARG(start.numel(), WARP_SIZE)(
-          W, start.data_ptr<int32_t>(), counts.data_ptr<scalar_t>(), out.data<bool>());
-      CHECK_CUDA_ERROR("mask_to_binary");
+      if (start.numel() > 0) {
+        mask_to_binary_kernel<scalar_t> KERNEL_ARG(start.numel(), WARP_SIZE)(
+            W, start.data_ptr<int32_t>(), counts.data_ptr<scalar_t>(), out.data<bool>());
+        CHECK_CUDA_ERROR("mask_to_binary");
+      }
     } else {
       bool* out_ptr = out.data<bool>();
       for (int k = 0; k < start.numel(); k++) {

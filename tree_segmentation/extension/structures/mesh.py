@@ -13,19 +13,19 @@ class Mesh:
     attr_names = ['v_pos', 'f_pos', 'v_nrm', 'f_nrm', 'v_tex', 'f_tex', 'v_tng', 'f_tng', 'v_clr', 'f_mat', 'material']
 
     def __init__(
-        self,
-        v_pos: Tensor = None,
-        f_pos: Tensor = None,
-        v_nrm: Tensor = None,
-        f_nrm: Tensor = None,
-        v_tex: Tensor = None,
-        f_tex: Tensor = None,
-        v_tng: Tensor = None,
-        f_tng: Tensor = None,
-        v_clr: Tensor = None,
-        f_mat: Tensor = None,
-        material: Material = None,
-        base: 'Mesh' = None,
+      self,
+      v_pos: Tensor = None,
+      f_pos: Tensor = None,
+      v_nrm: Tensor = None,
+      f_nrm: Tensor = None,
+      v_tex: Tensor = None,
+      f_tex: Tensor = None,
+      v_tng: Tensor = None,
+      f_tng: Tensor = None,
+      v_clr: Tensor = None,
+      f_mat: Tensor = None,
+      material: Material = None,
+      base: 'Mesh' = None,
     ):
         self.v_pos = v_pos  # value of position
         self.v_nrm = v_nrm  # value of vertices normal
@@ -270,7 +270,7 @@ class Mesh:
 
         # Update all 3 vertices
         for i in range(0, 3):
-            idx = vn_idx[i][:, None].repeat(1, 3)
+            idx = vn_idx[i][:, None].repeat(1, 3).long()
             tangents.scatter_add_(0, idx, tang)  # tangents[n_i] = tangents[n_i] + tang
             tansum.scatter_add_(0, idx, torch.ones_like(tang))  # tansum[n_i] = tansum[n_i] + 1
 

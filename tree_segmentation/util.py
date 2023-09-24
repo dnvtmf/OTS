@@ -14,7 +14,7 @@ from tree_segmentation.extension import utils
 
 __all__ = [
     'color_mask', 'get_colored_masks', 'show_masks', 'image_add_points', 'image_add_mask_boundary', 'show_all_levels',
-    'get_hash_name'
+    'get_hash_name', 'search_folder'
 ]
 
 
@@ -109,7 +109,7 @@ def image_add_mask_boundary(image: np.ndarray, mask: Tensor, color=(1., 0, 0), k
 
 
 def show_all_levels(image, tree: Union[Tree3D, Tree3Dv2, Tree2D], tri_id=None, dpi=None, width=5., alpha=0.3, **kwargs):
-    is_tree_2d = type(tree).__name__ == 'Tree2D'  #  isinstance(tree, Tree2D)
+    is_tree_2d = type(tree).__name__ == 'Tree2D'  # isinstance(tree, Tree2D)
     if is_tree_2d:
         levels = tree.get_levels()
         aux_data = None
@@ -154,3 +154,19 @@ def get_hash_name(filepath: Path) -> str:
     # return hashlib.md5(str(filepath.absolute()).encode()).hexdigest()
     parts = filepath.parts
     return f"{parts[-3]}_{parts[-2]}_{filepath.stem}"
+
+
+def search_folder(d: Path, extenstions=None):
+    outputs = []
+    for x in d.iterdir():
+        if x.is_dir():
+            outputs.extend(search_folder(x, extenstions))
+        else:
+            if extenstions is None:
+                outputs.append(x)
+            elif isinstance(extenstions, str):
+                if x.suffix == extenstions:
+                    outputs.append(x)
+            elif x.suffix in extenstions:
+                outputs.append(x)
+    return outputs

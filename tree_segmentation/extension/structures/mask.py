@@ -8,7 +8,7 @@ from tree_segmentation.extension._C import get_C_function, have_C_functions
 
 class Masks:
     BINARY = 'bin'  # binary mask
-    ENCODED = 'enc'  # like run-length encoding (RLE), but only encode last dim
+    ENCODED = 'enc'  # using run-length encoding (RLE), but only encode last dim
 
     # MULTI = 'multi'  # encode many masks
     eps = 1e-7
@@ -339,6 +339,12 @@ class Masks:
                 index = torch.arange(s, e, t, device=self.start.device)
         if isinstance(index, Tensor):
             assert index.ndim == 1
+            if index.numel() == 0:
+                shape = [0] + list(self._shape[1:])
+                out = Masks(self.data.new_zeros(0), self.start[:0], shape, format=self.format)
+                if self._area is not None:
+                    out._area = self._area[:0]
+                return out
             N = self.start[0].numel()
             M = self.start.shape[0]
             start = self.start.view(-1, N)
@@ -495,6 +501,26 @@ def test():
     print(e.binary().data.int())
     e[-1] = b[0]
     print(e.binary().data.int())
+
+
+def test_empty():
+    a = torch.zeros((0, 100), dtype=torch.bool).cuda()
+    print(a)
+    b = Masks(a, format=Masks.BINARY)
+    print(b)
+    c = b.encode()
+    print(c)
+    d = c.binary()
+    print(d)
+    # index
+    e = c[:1]
+    print(e)
+    e = d[:1]
+    print(e)
+    index = torch.tensor([], dtype=torch.long, device='cuda')
+    print(index)
+    print(c[index])
+    print(d[index])
 
 
 if __name__ == '__main__':
