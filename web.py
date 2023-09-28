@@ -1,6 +1,6 @@
 import os
 from pathlib import Path
-from typing import Union
+from typing import Union, Any
 
 import cv2
 import gradio as gr
@@ -47,7 +47,7 @@ class WebUI(TreeSegment):
     def run(self):
         self.web_ui.launch(share=False, server_name='0.0.0.0')
 
-    def get_value(self, name, default=None):
+    def get_value(self, name, default=None) -> Any:
         if name in self.cfg:
             return self.cfg[name]
         elif name == 'sam_path':
@@ -146,8 +146,10 @@ class WebUI(TreeSegment):
                 add_option('in_area_threshold', 50, precision=0)
                 add_option('union_threshold', 0.1)
                 add_option('alpha', 0.3)
-        # with gr.Group():
-        #     gr.Markdown('Tree Segmentation 2D')
+        with gr.Group():
+            gr.Markdown('Tree Segmentation 3D Options')
+            with gr.Row():
+                add_option('num_images', 100, precision=0)
 
     def update_2d_results(self):
         data = []
@@ -295,7 +297,7 @@ class WebUI(TreeSegment):
         self.mesh_paths = [Path(*path.parts[n:]).as_posix() for path in self.mesh_paths]
         self.change_mesh_ui = gr.Dropdown(
             choices=self.mesh_paths,
-            value=self.mesh_paths[0] if len(self.mesh_paths) > 0 else None,
+            value=None,
             type="index",
             multiselect=False,
             allow_custom_value=False,
@@ -303,14 +305,32 @@ class WebUI(TreeSegment):
             label='examples',
         )
         print(self.mesh_paths)
-        self.view_3d = gr.Model3D(clear_color=(0., 0., 0., 0.))
+        self.view_3d = gr.Model3D(clear_color=[0., 0., 0., 0.])
         self.change_mesh_ui.select(self.change_mesh, self.change_mesh_ui, self.view_3d)
         with gr.Row():
-            # self.load_3d = gr.Button('Load example')
-            self.run_3d = gr.Button('Run')
+            self.reset_3d_btn = gr.Button('Reset')
+            self.render_btn = gr.Button('Render')
+            self.run_3d_seg_2d = gr.Button('2D Seg')
+            self.run_3d_merge = gr.Button('3D Seg')
+        with gr.Row():
+            # self.show_2d = gr.Button('Show 2D')
+            self.slider = gr.Slider(minimum=1, maximum=self.get_value('num_images', 100), interactive=True)
+        with gr.Row():
+            self.tree_2d_gallery = gr.Gallery(
+                label='Images',
+                show_label=False,
+                elem_id='gallery',
+                columns=[6],
+                object_fit='contain',
+                height='auto',
+                visible=True)
         # self.load_3d.click(self.get_mesh_path, self.view_3d, self.view_3d)
         self.seg3d_levels = [gr.Model3D(label=f"level {i}", visible=False) for i in range(10)]
-        self.run_3d.click(self.load_tree_seg_3d, outputs=self.seg3d_levels)
+        self.run_3d_merge.click(self.load_tree_seg_3d, outputs=self.seg3d_levels)
+        self.reset_3d_btn.click(self.reset_3d, outputs=[self.slider])
+        # self.show_2d.click(lambda: self.tree_2d_gallery.update(visible=not self.tree_2d_gallery.get_config()[
+        #     'visible']),
+        #     outputs=self.tree_2d_gallery)
 
 
 if __name__ == "__main__":
