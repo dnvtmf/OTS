@@ -11,6 +11,9 @@ conda activate tree_seg
 
 cd semantic_sam/ops
 bash ./build.sh
+
+cd tree_segmentation/extension/_C
+python setup.py build_ext --inplace
 ```
 
 ## Download pretrained weights

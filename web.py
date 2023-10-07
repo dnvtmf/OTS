@@ -7,14 +7,30 @@ import gradio as gr
 import numpy as np
 import seaborn as sns
 import torch
+import math
+from tqdm import tqdm
 
 from segment_anything.build_sam import Sam
 from semantic_sam import SemanticSAM
 from tree_segmentation import Tree3Dv2
-from tree_segmentation.extension import utils
+from tree_segmentation.extension import utils, ops_3d
 from tree_segmentation.tree_3d import TreeSegment
 from tree_segmentation.util import get_colored_masks, search_folder, get_hash_name
+from pprint import pprint
 
+# 随机视角
+def random_camera_pose(image_size=1024, num=1, radius_range=(2., 4.), elev_range=(0, 180), azim_range=(-180, 180), device = torch.device('cuda')):
+    radius = torch.rand(num, device=device) * (radius_range[1] - radius_range[0]) + radius_range[0]
+    thetas = torch.rand(num, device=device) * (elev_range[1] - elev_range[0]) + elev_range[0]
+    phis = torch.rand(num, device=device) * (azim_range[1] - azim_range[0]) + azim_range[0]
+
+    fovy = math.radians(60)
+    Tv2c = ops_3d.perspective(fovy=fovy, size=(image_size, image_size), device=device)
+    eye = ops_3d.coord_spherical_to(radius, thetas.deg2rad(), phis.deg2rad()).to(device)
+    Tw2v = ops_3d.look_at(eye, torch.zeros_like(eye))
+    Tv2w = ops_3d.look_at(eye, torch.zeros_like(eye), inv=True)
+    Tw2c = Tv2c @ Tw2v
+    return Tw2c, Tv2w
 
 class WebUI(TreeSegment):
 
@@ -260,13 +276,18 @@ class WebUI(TreeSegment):
                 utils.save_glb(mesh_path, self.mesh)
                 print(f"Web: convert to glb formart, save to {mesh_path}")
         assert mesh_path.is_file()
+        self.load_mesh(obj_path=self.mesh_path)     # 加载mesh
+        self.tree_3d = Tree3Dv2(self.mesh, self.device)
         return mesh_path
 
     def load_tree_seg_3d(self):
         if self._mesh is None:
-            return
-        self._tree_3d = Tree3Dv2(self.mesh, self.device)
-        self.tree3d.load(Path('./results/Replica/room_1/n10000.tree3dv2'))
+            print("[Web] self._mesh is None")
+            return 
+        # self._tree_3d = Tree3Dv2(self.mesh, self.device)
+        # self.tree3d.load(Path('./results/Replica/room_1/n10000.tree3dv2'))
+        # self.tree3d.load(Path('./results/gt.tree3dv2'))
+        self.tree_3d = Tree3Dv2(self.mesh, self.device)
         self.levels_3d = self.tree3d.get_levels()
         restuls = []
         for i in range(len(self.seg3d_levels)):
@@ -289,7 +310,37 @@ class WebUI(TreeSegment):
                 restuls.append(self.seg3d_levels[i].update(mesh_path, visible=True))
             else:
                 restuls.append(self.seg3d_levels[i].update(value=None, visible=False))
+        print("[Web] load_tree_seg_3d done.")
+        pprint(restuls) # 调试用，发现数据为空
         return restuls
+
+    
+    # 生成图片
+    def render(self, n=5):
+        # n为图片数量
+        self.image_list = []
+        for i in tqdm(range(n)):
+            _, Tv2w = random_camera_pose()
+            # self.new_camera_pose(Tw2v=Tv2w[0].inverse())
+            self.image_list.append(self.rendering(Tw2v=Tv2w[0].inverse()))
+        print("[Web] Render finished.")
+        return self.image_list
+    
+    def seg_2d_all(self):
+        self.seg_all_list = []
+        for image in tqdm(self.image_list):
+            # 调试：判断是否为不同图片
+            if self._image is None:
+                print("[Web] New image")
+            else:
+                if (self._image == image).all():
+                    print("[Web] Old Image.")
+                else:
+                    print("[Web] New image")
+                    self.reset_2d()
+            self.image = image
+            self.seg_all_list += [i["value"] for i in self.run_tree_seg_2d_stage1() if i["value"] is not None]
+        return self.seg_all_list
 
     def build_tree_seg_3d_ui(self):
         self.mesh_paths = search_folder(self.mesh_dir, utils.mesh_extensions)
@@ -312,9 +363,9 @@ class WebUI(TreeSegment):
             self.render_btn = gr.Button('Render')
             self.run_3d_seg_2d = gr.Button('2D Seg')
             self.run_3d_merge = gr.Button('3D Seg')
-        with gr.Row():
-            # self.show_2d = gr.Button('Show 2D')
-            self.slider = gr.Slider(minimum=1, maximum=self.get_value('num_images', 100), interactive=True)
+        # with gr.Row():
+        #     # self.show_2d = gr.Button('Show 2D')
+        #     self.slider = gr.Slider(minimum=1, maximum=self.get_value('num_images', 100), interactive=True)
         with gr.Row():
             self.tree_2d_gallery = gr.Gallery(
                 label='Images',
@@ -324,11 +375,24 @@ class WebUI(TreeSegment):
                 object_fit='contain',
                 height='auto',
                 visible=True)
+        
         # self.load_3d.click(self.get_mesh_path, self.view_3d, self.view_3d)
-        self.seg3d_levels = [gr.Model3D(label=f"level {i}", visible=False) for i in range(10)]
+        self.seg3d_levels = [gr.Model3D(label=f"level {i}", visible=True) for i in range(10)]
         self.run_3d_merge.click(self.load_tree_seg_3d, outputs=self.seg3d_levels)
-        self.reset_3d_btn.click(self.reset_3d, outputs=[self.slider])
-        # self.show_2d.click(lambda: self.tree_2d_gallery.update(visible=not self.tree_2d_gallery.get_config()[
+        # self.reset_3d_btn.click(self.reset_3d, outputs=[self.slider])
+        self.reset_3d_btn.click(self.reset_3d)
+        '''
+        第2步,  点Render按钮,  渲染100个视角的图片,  同时滑动下方的slider可以看到对应的图片
+        第3步,  点2D seg按钮,  对每张图片进行2D Tree Segmentation, 同时结果也展示到下方的tree_2d_gallery里, 
+             注意将结果保存在self.cache_dir里中, 以避免重复计算
+        第4步,  点3D Seg按钮, 运行self.tree3d.run(), 并将结果用 self.seg3d_levels 展示
+        '''
+        self.render_btn.click(self.render, outputs=self.tree_2d_gallery)             # 点击render, 生成n张图片
+        # self.slider.release()               # 滑动滑块展示图片
+        self.run_3d_seg_2d.click(self.seg_2d_all, outputs=self.tree_2d_gallery)      # 点2D Seg按钮
+        self.tree_3d = Tree3Dv2(self.mesh, self.device)
+        self.run_3d_merge.click(self.tree_3d.run, outputs=self.seg3d_levels)             # 点击3D Seg按钮
+        # self.show_2d.click(lambda: self.tree_2d_gallery(visible=not self.tree_2d_gallery.get_config()[
         #     'visible']),
         #     outputs=self.tree_2d_gallery)
 
