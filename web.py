@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import Union, Any
 
 import cv2
+from PIL import Image
 import gradio as gr
 import numpy as np
 import seaborn as sns
@@ -270,8 +271,8 @@ class WebUI(TreeSegment):
         self._mesh = None
         print(f"[Web] change mesh to {self.mesh_path}")
         if self.mesh_path.suffix != '.glb':
-            name = self.mesh_paths[self.mesh_index].replace('/', '_')
-            mesh_path = self.cache_web.joinpath(name).with_suffix('.glb')
+            mesh_name = self.mesh_paths[self.mesh_index].replace('/', '_')
+            mesh_path = self.cache_web.joinpath(mesh_name).with_suffix('.glb')
             if not mesh_path.exists():
                 utils.save_glb(mesh_path, self.mesh)
                 print(f"Web: convert to glb formart, save to {mesh_path}")
@@ -316,13 +317,32 @@ class WebUI(TreeSegment):
 
     
     # 生成图片
-    def render(self, n=5):
+    def render(self, n=10):
         # n为图片数量
+        self.mesh_name = self.mesh_paths[self.mesh_index].replace('/', '_')
+        print(self.mesh_name)
+        self.cache_render = self.cache_web.joinpath("render_cache")
+        self.cache_render.mkdir(exist_ok=True)
+        self.cache_render = self.cache_render.joinpath(self.mesh_name).with_suffix("")
+        self.cache_render.mkdir(exist_ok=True)
         self.image_list = []
         for i in tqdm(range(n)):
-            _, Tv2w = random_camera_pose()
-            # self.new_camera_pose(Tw2v=Tv2w[0].inverse())
-            self.image_list.append(self.rendering(Tw2v=Tv2w[0].inverse()))
+            i = str(i)
+            img_path = self.cache_render.joinpath(i).with_suffix('.png')
+            if not img_path.exists():
+                _, Tv2w = random_camera_pose()
+                # self.new_camera_pose(Tw2v=Tv2w[0].inverse())
+                img = (np.array(self.rendering(Tw2v=Tv2w[0].inverse()))*255).astype(np.uint8)
+                # print(img.shape)
+                self.image_list.append(img)
+                # cv2.imwrite(filename=str(img_path), img=img) # cv2默认按照BRG保存，与gr中直接按照RGB显示出来不同，因此考虑使用PIL
+                Img = Image.fromarray(img, 'RGB')
+                Img.save(img_path)
+                # 问题：保存时需要转换成uint8，但转换会导致一些损失，是否需要考虑？
+                print(f"[Web] Rendering picture {i}, save to {img_path}.")
+            else:
+                print(f"[Web] {img_path} already exists, passing.")
+                self.image_list.append( np.array(Image.open(img_path)) )
         print("[Web] Render finished.")
         return self.image_list
     
