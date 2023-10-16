@@ -296,7 +296,7 @@ class TreeSegment:
 
         self._3d_aux_data = self.tree3d.get_aux_data(tri_id)
         self.levels_3d = self.tree3d.get_levels(self._3d_aux_data)
-        return image
+        return image, tri_id
 
     def run_tree_seg_2d_stage1(self):
         self.mask_data = None

@@ -1540,7 +1540,7 @@ class Tree3Dv2(TreeStructure):
         # print('[Tree3D] GPU:', utils.get_GPU_memory())
         # if self.view_masks is None or (N_view > 0 and N_view != self.N_view):
         #     self.load_2d_results(self.save_root, N_view)
-        assert self.masks_view is not None
+        assert self.masks_view is not None, f"self.masks_view is {self.masks_view}"
         print('[Tree3D] GPU:', utils.get_GPU_memory())
         K = 2 * self.Lmax if K is None else K
         edge_weight = None
