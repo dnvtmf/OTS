@@ -21,8 +21,16 @@ from tree_segmentation.tree_3d import TreeSegment
 from tree_segmentation.util import get_colored_masks, search_folder, get_hash_name
 from pprint import pprint
 
+
 # 随机视角
-def random_camera_pose(image_size=1024, num=1, radius_range=(2., 4.), elev_range=(0, 180), azim_range=(-180, 180), device = torch.device('cuda')):
+def random_camera_pose(
+    image_size=1024,
+    num=1,
+    radius_range=(2., 4.),
+    elev_range=(0, 180),
+    azim_range=(-180, 180),
+    device=torch.device('cuda')
+):
     radius = torch.rand(num, device=device) * (radius_range[1] - radius_range[0]) + radius_range[0]
     thetas = torch.rand(num, device=device) * (elev_range[1] - elev_range[0]) + elev_range[0]
     phis = torch.rand(num, device=device) * (azim_range[1] - azim_range[0]) + azim_range[0]
@@ -34,6 +42,7 @@ def random_camera_pose(image_size=1024, num=1, radius_range=(2., 4.), elev_range
     Tv2w = ops_3d.look_at(eye, torch.zeros_like(eye), inv=True)
     Tw2c = Tv2c @ Tw2v
     return Tw2c, Tv2w
+
 
 class WebUI(TreeSegment):
 
@@ -180,8 +189,7 @@ class WebUI(TreeSegment):
                 if self.image.dtype == np.uint8:
                     image = (image * 255).astype(np.uint8)
                 image = cv2.addWeighted(self.image[..., :3], alpha, image[..., :3], 1 - alpha, 0)
-                # 本步骤有问题
-                data.append(self.img_levels[i].update(image, visible=True, width=image.shape[1]))
+                data.append(self.img_levels[i].update(image, visible=True))
             else:
                 data.append(self.img_levels[i].update(value=None, visible=i == 0))
         return data
@@ -280,7 +288,7 @@ class WebUI(TreeSegment):
                 utils.save_glb(mesh_path, self.mesh)
                 print(f"Web: convert to glb formart, save to {mesh_path}")
         assert mesh_path.is_file()
-        self.load_mesh(obj_path=self.mesh_path)     # 加载mesh
+        self.load_mesh(obj_path=self.mesh_path)  # 加载mesh
         self.tree_3d = Tree3Dv2(self.mesh, self.device, verbose=1)
         return mesh_path
 
@@ -288,20 +296,24 @@ class WebUI(TreeSegment):
         self.cache_2d_all = self.cache_web.joinpath("2d_all")
         if self._mesh is None:
             print("[Web] self._mesh is None")
-            return 
-        # self._tree_3d = Tree3Dv2(self.mesh, self.device)
+            return
+            # self._tree_3d = Tree3Dv2(self.mesh, self.device)
         # self.tree3d.load(Path('./results/Replica/room_1/n10000.tree3dv2'))
         # self.tree3d.load(Path('./results/gt.tree3dv2'))
         self.cache_tree3d = self.cache_web.joinpath(f'my_{self.mesh_name}.tree3dv2')
         if not self.cache_tree3d.exists():
             print("[Web] Tree 3D not exists, loading Tree 2D data.")
             self.tree_3d = Tree3Dv2(self.mesh, self.device, verbose=1)
-            self.tree_3d.load_2d_results(self.cache_2d_all, pack=True) # 读取.data文件
+            self.tree_3d.load_2d_results(self.cache_2d_all, pack=True)  # 读取.data文件
             print("[Web] Tree 3D building graph...")
             A = self.tree_3d.build_all_graph()
             X, autoencoder = self.tree_3d.compress_masks(epochs=3000)
             K = self.tree_3d.Lmax * 2
-            gnn = pyg.nn.GCN(in_channels=X.shape[1], hidden_channels=128, num_layers=2, out_channels=K, norm='BatchNorm').cuda()
+            gnn = pyg.nn.GCN(in_channels=X.shape[1],
+                hidden_channels=128,
+                num_layers=2,
+                out_channels=K,
+                norm='BatchNorm').cuda()
             print(gnn)
             print("[Web] Tree 3D running...")
             self.tree_3d.run(epochs=10000, K=K, gnn=gnn, A=A * A.ge(0.5), X=X)
@@ -337,7 +349,6 @@ class WebUI(TreeSegment):
         # pprint(restuls[0]) # 调试用，发现数据为空
         return restuls
 
-    
     # 生成图片
     def render(self, n=10):
         # n为图片数量
@@ -354,15 +365,15 @@ class WebUI(TreeSegment):
         for i in tqdm(range(n)):
             i = str(i)
             img_path = self.cache_render.joinpath(f"pic_{i}").with_suffix('.png')
-            tri_id_path = self.cache_render.joinpath(f"tri_id_{i}").with_suffix(".pth") 
-            Tw2v_path = self.cache_render.joinpath(f"Tw2v_{i}").with_suffix(".pth") 
+            tri_id_path = self.cache_render.joinpath(f"tri_id_{i}").with_suffix(".pth")
+            Tw2v_path = self.cache_render.joinpath(f"Tw2v_{i}").with_suffix(".pth")
             if not img_path.exists() and not tri_id_path.exists() and not Tw2v_path.exists():
                 print(f"[Web] Rendering picture {i}, save to {img_path}.")
                 _, Tv2w = random_camera_pose()
                 # self.new_camera_pose(Tw2v=Tv2w[0].inverse())
                 Tw2v = Tv2w[0].inverse()
                 img, tri_id = self.rendering(Tw2v=Tw2v)
-                img = (np.array(img)*255).astype(np.uint8)  # 这里为保存为png将其乘255，后续分割时需做逆变换，否则分割无效
+                img = (np.array(img) * 255).astype(np.uint8)  # 这里为保存为png将其乘255，后续分割时需做逆变换，否则分割无效
                 # print(img.shape)
                 Image.fromarray(img, 'RGB').save(img_path)
                 torch.save(tri_id.clone(), tri_id_path)
@@ -378,13 +389,13 @@ class WebUI(TreeSegment):
             self.Tw2vs.append(Tw2v)
         print("[Web] Render finished.")
         return self.image_list
-    
+
     # 只保存Tw2vs
-    def render_v2(self, n = 10):
+    def render_v2(self, n=10):
         # n为图片数量
         self.mesh_name = self.mesh_paths[self.mesh_index].replace('/', '_').split(".")[0]
         print(self.mesh_name)
-        self.cache_Tw2vs = self.cache_web.joinpath(f"{self.mesh_name}_Tw2vs_{n}").with_suffix(".pth") 
+        self.cache_Tw2vs = self.cache_web.joinpath(f"{self.mesh_name}_Tw2vs_{n}").with_suffix(".pth")
         self.Tw2vs = []
         self.image_list = []
         self.tri_ids = []
@@ -405,12 +416,12 @@ class WebUI(TreeSegment):
             self.tri_ids.append(tri_id)
         print("[Web] Render finished.")
         return self.image_list
-    
+
     def seg_2d_all(self):
         self.seg_all_list = []
         print(len(self.image_list))
         for index in tqdm(range(len(self.image_list))):
-        # for image in tqdm(self.image_list):
+            # for image in tqdm(self.image_list):
             # 调试：判断是否为不同图片
             if self._image is None:
                 print("[Web] New image")
@@ -437,7 +448,6 @@ class WebUI(TreeSegment):
                 # 本步骤有问题
                 self.seg_all_list.append(image)
 
-            
         return self.seg_all_list
 
     def seg_2d_all_v2(self):
@@ -451,7 +461,7 @@ class WebUI(TreeSegment):
             self.image = self.image_list[index]
             self.tri_id = self.tri_ids[index]
             tree_data = self.predictor.tree_generate(
-                (self._image* 255).astype(np.uint8), # 此处需要0-255图片
+                (self._image * 255).astype(np.uint8),  # 此处需要0-255图片
                 max_steps=100,
                 in_threshold=0.8,
                 union_threshold=0.1,
@@ -466,7 +476,6 @@ class WebUI(TreeSegment):
                 'image': self._image,
                 'Tw2v': self.Tw2vs[index].clone(),
             }
-            
             torch.save(data, self.cache_2d_all.joinpath(f"view_{index:04d}.data"))
         print("[Web] 2D Seg all done.")
         return self.seg_all_list
@@ -504,21 +513,15 @@ class WebUI(TreeSegment):
                 object_fit='contain',
                 height='auto',
                 visible=True)
-        
+
         # self.load_3d.click(self.get_mesh_path, self.view_3d, self.view_3d)
         self.seg3d_levels = [gr.Model3D(label=f"level {i}", visible=True) for i in range(10)]
         self.run_3d_merge.click(self.load_tree_seg_3d, outputs=self.seg3d_levels)
         # self.reset_3d_btn.click(self.reset_3d, outputs=[self.slider])
         self.reset_3d_btn.click(self.reset_3d)
-        '''
-        第2步,  点Render按钮,  渲染100个视角的图片,  同时滑动下方的slider可以看到对应的图片
-        第3步,  点2D seg按钮,  对每张图片进行2D Tree Segmentation, 同时结果也展示到下方的tree_2d_gallery里, 
-             注意将结果保存在self.cache_dir里中, 以避免重复计算
-        第4步,  点3D Seg按钮, 运行self.tree3d.run(), 并将结果用 self.seg3d_levels 展示
-        '''
-        self.render_btn.click(self.render_v2, outputs=self.tree_2d_gallery)             # 点击render, 生成n张图片
+        self.render_btn.click(self.render_v2, outputs=self.tree_2d_gallery)  # 点击render, 生成n张图片
         # self.slider.release()               # 滑动滑块展示图片
-        self.run_3d_seg_2d.click(self.seg_2d_all_v2, outputs=self.tree_2d_gallery)      # 点2D Seg按钮
+        self.run_3d_seg_2d.click(self.seg_2d_all_v2, outputs=self.tree_2d_gallery)  # 点2D Seg按钮
         # self.tree_3d = Tree3Dv2(self.mesh, self.device)
         # self.run_3d_merge.click(self.tree_3d.run, outputs=self.seg3d_levels)             # 点击3D Seg按钮
         # self.show_2d.click(lambda: self.tree_2d_gallery(visible=not self.tree_2d_gallery.get_config()[

@@ -1,6 +1,7 @@
 import argparse
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
 import torch.cuda
@@ -42,6 +43,8 @@ def options():
     parser.add_argument('--in_area_threshold', default=50, type=float)
     parser.add_argument('--union_threshold', default=0.1, type=float)
     parser.add_argument('--min_area', default=100, type=float)
+    utils.add_bool_option(parser, '--skip-error', default=False, help='Continue segment when error occured')
+    utils.add_bool_option(parser, '-s', '--skip-exist', default=True, help='Skip segmented images')
     args = parser.parse_args()
     return args
 
@@ -81,6 +84,13 @@ def load_predictor(args):
 
 
 def deal_one_image(args, predictor: TreePredictor, device, image_path: Path, save_dir: Path):
+    if args.skip_exist:
+        if args.format == '.tree2d' and save_dir.joinpath(image_path.stem + '.tree2d').exists():
+            return
+        if args.format == '.tiff' and save_dir.joinpath(image_path.stem + '.tiff').exists():
+            return
+        if args.format == '.png' and len(list(save_dir.glob(f'{image_path.stem}_level_*.png'))) > 0:
+            return
     image = utils.load_image(image_path)[..., :3]
     # print('image:', image.shape)
 
@@ -105,22 +115,23 @@ def deal_one_image(args, predictor: TreePredictor, device, image_path: Path, sav
         utils.save_image(save_dir.joinpath(image_path.stem + '.tiff'), masks)
     else:
         masks = results.masks.cpu().numpy()
-        for i in range(len(masks)):
-            mask = np.zeros_like(masks[i], dtype=np.uint8)
-            instances = np.unique(masks[i])
-            if instances[0] == 0:
-                instances = instances[1:]
-            num_colors = len(instances)
-            colors = np.array([[1, 1, 1]] + sns.color_palette(n_colors=num_colors))
-            for j, idx in enumerate(instances):
-                mask[masks[i] == idx] = j + 1
+        levels = results.get_levels()
+        for i, level_i in enumerate(levels):
+            if i == 0:
+                continue
+            mask = masks[level_i.cpu().numpy() - 1].astype(np.uint8)
+            mask = np.max(mask * np.arange(1, mask.shape[0] + 1)[:, None, None], axis=0).astype(np.uint8)
+            # plt.imshow(mask)
+            # plt.show()
+            colors = np.array([[1, 1, 1]] + sns.color_palette(n_colors=len(level_i)))
             mask_i = Image.fromarray(mask, mode='P')
             mask_i.putpalette((colors * 255).astype(np.uint8))
-            mask_i.save(save_dir.joinpath(f'{image_path.stem}_level_{i + 1}.png'))
+            mask_i.save(save_dir.joinpath(f'{image_path.stem}_level_{i}.png'))
 
 
 def main():
     args = options()
+    print('options:', args)
     save_dir = Path(args.output).expanduser()
     assert save_dir.is_dir(), f"The output directory '{save_dir}' is not exists"
 
@@ -131,7 +142,13 @@ def main():
     if image_path.is_dir():
         for img_path in tqdm(list(image_path.glob('*.*'))):
             if img_path.suffix in utils.image_extensions:
-                deal_one_image(args, predictor, device, img_path, save_dir)
+                try:
+                    deal_one_image(args, predictor, device, img_path, save_dir)
+                except Exception as e:
+                    if args.skip_error:
+                        print(str(e))
+                    else:
+                        raise e
     else:
         assert image_path.suffix in utils.image_extensions, f"File {image_path} not a image"
         deal_one_image(args, predictor, device, image_path, save_dir)

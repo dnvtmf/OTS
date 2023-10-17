@@ -14,7 +14,7 @@ from tree_segmentation.extension import ops_3d
 from semantic_sam import SemanticSAM, semantic_sam_l, semantic_sam_t
 import tree_segmentation as tree_segmentation
 from segment_anything.build_sam import Sam, build_sam, build_sam_vit_b, build_sam_vit_l
-from tree_segmentation import MaskData, Tree2D, TreePredictor, Tree3D
+from tree_segmentation import MaskData, Tree2D, TreePredictor, Tree3Dv2
 from tree_segmentation.render import render_mesh
 from tree_segmentation.util import get_hash_name
 
@@ -49,7 +49,7 @@ class TreeSegment:
         self._2d_levels: List[Tensor] = []
         self._2d_mask = None
 
-        self._tree_3d: Optional[Tree3D] = None
+        self._tree_3d: Optional[Tree3Dv2] = None
         self._3d_levels: List[Tensor] = []
         self._3d_mask = None
         self._3d_aux_data: Optional[Dict[Union[int, str], Tensor]] = None
@@ -139,9 +139,9 @@ class TreeSegment:
         return self._tree_2d
 
     @property
-    def tree3d(self) -> Tree3D:
+    def tree3d(self) -> Tree3Dv2:
         if self._tree_3d is None:
-            self._tree_3d = tree_segmentation.Tree3D(self.mesh, device=self.device)
+            self._tree_3d = tree_segmentation.Tree3Dv2(self.mesh, device=self.device)
         return self._tree_3d
 
     @property
@@ -463,7 +463,7 @@ class TreeSegment:
                 adj_nodes[self.mesh.f_pos[adj_faces]] = 1
             adj_faces = torch.nonzero(adj_nodes[self.mesh.f_pos].any(dim=-1)).squeeze()
             _, f_pos, v_pos = xatlas.parametrize(self.mesh.v_pos.cpu().numpy(),
-                                                 self.mesh.f_pos[adj_faces].cpu().numpy())
+                self.mesh.f_pos[adj_faces].cpu().numpy())
         else:
             adj_faces = None
             _, f_pos, v_pos = xatlas.parametrize(self.mesh.v_pos.cpu().numpy(), self.mesh.f_pos.cpu().numpy())
@@ -518,7 +518,6 @@ def main():
     segment.run_tree_3d_cycle()
     segment.run_tree_3d_uniform()
     segment.run_tree_3d_load()
-
 
 # 概率图模型
 ## 理论框架
