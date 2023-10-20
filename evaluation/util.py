@@ -1,26 +1,15 @@
 import argparse
-import json
-import math
-import os
 from pathlib import Path
 from typing import Optional
 
-import nvdiffrast.torch as dr
-import torch
-from torch import Tensor
 import numpy as np
-from tqdm import tqdm
-from rich.console import Console
-from rich.tree import Tree
-import torch_geometric as pyg
+import torch
 
-from semantic_sam import semantic_sam_l, semantic_sam_t
 from segment_anything import build_sam, build_sam_vit_b, build_sam_vit_l
-from tree_segmentation.extension import Mesh, utils, ops_3d
-from tree_segmentation import Tree3Dv2, Tree3D, TreePredictor, render_mesh
-from tree_segmentation.metric import TreeSegmentMetric
+from semantic_sam import semantic_sam_l, semantic_sam_t
+from tree_segmentation import TreePredictor
 
-predictor = None
+predictor: Optional[TreePredictor] = None
 
 
 def predictor_options(parser: argparse.ArgumentParser):
@@ -61,17 +50,17 @@ def get_predictor(args=None, print=print, device=torch.device('cuda')):
     if args.segment_anything or args.segment_anything_h:
         assert model_dir.joinpath('sam_vit_h_4b8939.pth').exists(), f"Not model 'sam_vit_h_4b8939.pth' in {model_dir}"
         model = build_sam(model_dir.joinpath('sam_vit_h_4b8939.pth'))
-        #save_root.joinpath('SAM')
+        # save_root.joinpath('SAM')
         print('Loaded Model SAM')
     elif args.segment_anything_l:
         assert model_dir.joinpath('sam_vit_l_0b3195.pth').exists(), f"Not model 'sam_vit_l_0b3195.pth' in {model_dir}"
         model = build_sam_vit_l(model_dir.joinpath('sam_vit_l_0b3195.pth'))
-        #save_root.joinpath('SAM')
+        # save_root.joinpath('SAM')
         print('Loaded Model SAM-L')
     elif args.segment_anything_b:
         assert model_dir.joinpath('sam_vit_b_01ec64.pth').exists(), f"Not model 'sam_vit_b_01ec64.pth' in {model_dir}"
         model = build_sam_vit_b(model_dir.joinpath('sam_vit_b_01ec64.pth'))
-        #save_root.joinpath('SAM')
+        # save_root.joinpath('SAM')
         print('Loaded Model SAM-B')
     elif args.semantic_sam_t:
         assert model_dir.joinpath('swint_only_sam_many2many.pth').exists(), \
@@ -103,16 +92,17 @@ def get_predictor(args=None, print=print, device=torch.device('cuda')):
 
 def run_predictor(image: np.ndarray, device=torch.device('cuda'), compress=True):
     assert predictor is not None
+    cfg = predictor.generate_cfg  # noqa
     results = predictor.tree_generate(
         image,
-        points_per_side=predictor.generate_cfg.points_per_side,
-        points_per_update=predictor.generate_cfg.points_per_update,
-        min_mask_region_area=predictor.generate_cfg.min_area,
-        max_steps=predictor.generate_cfg.max_steps,
-        in_threshold=predictor.generate_cfg.in_threshold,
-        in_thre_area=predictor.generate_cfg.in_area_threshold,
-        union_threshold=predictor.generate_cfg.union_threshold,
-        ratio=predictor.generate_cfg.explore_ratio,
+        points_per_side=cfg.points_per_side,
+        points_per_update=cfg.points_per_update,
+        min_mask_region_area=cfg.min_area,
+        max_steps=cfg.max_steps,
+        in_threshold=cfg.in_threshold,
+        in_thre_area=cfg.in_area_threshold,
+        union_threshold=cfg.union_threshold,
+        ratio=cfg.explore_ratio,
         device=device,
         compress=compress,
     )

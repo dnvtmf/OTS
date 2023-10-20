@@ -87,7 +87,7 @@ def deal_CelebAMask():
     image_names = sorted([image_path for image_path in face_img_root.glob('*.jpg')])
     print(f'There are {len(image_names)} image for CelebAMask-HQ')
 
-    return image_names,
+    return image_names
 
 
 def deal_Cityscapes():

@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch import Tensor
 
 from segment_anything.utils.amg import (MaskData, build_point_grid, remove_small_regions)
-from tree_segmentation import TreeStructure
+from tree_segmentation.tree_structure import TreeStructure
 from tree_segmentation.extension import utils, Masks
 
 
@@ -422,6 +422,7 @@ class Tree2D(TreeStructure):
         """
         if self.verbose > 0:
             print(f"[Tree2D] post process min_area={min_area}")
+        torch.cuda.synchronize()
         self.uncompress()
         masks = self.masks
         unchanged = True
@@ -444,7 +445,7 @@ class Tree2D(TreeStructure):
             for i in range(len(nodes)):
                 idx = nodes[order[i]]
                 mask_i = masks[idx - 1]
-                mask_f = masks[self.parent[idx] - 1]
+                mask_f = masks[self.parent[idx] - 1] if self.parent[idx] > 0 else torch.ones_like(mask_i)
                 mask_level[mask_i & mask_f] = idx
             for i in range(len(nodes)):
                 masks[nodes[i] - 1] = mask_level == nodes[i]

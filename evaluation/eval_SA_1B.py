@@ -1,6 +1,6 @@
-import time
 import argparse
 import json
+import time
 from pathlib import Path
 
 import cv2
@@ -11,7 +11,7 @@ from rich.console import Console
 
 from evaluation.util import run_predictor, predictor_options, get_predictor
 from tree_segmentation import MaskData, Tree2D, TreeSegmentMetric
-from tree_segmentation.extension import utils, Masks
+from tree_segmentation.extension import utils
 
 
 def read_annotations(json_path: Path, image_size=None):
@@ -73,7 +73,7 @@ def main():
         save_dir = None
         save_gt_dir = None
 
-    data_root = Path(args.data_root).expanduser()  #.joinpath(f"{args.eval_part:06d}")
+    data_root = Path(args.data_root).expanduser()  # .joinpath(f"{args.eval_part:06d}")
     images_paths = sorted(list(data_root.glob('*.jpg')))
     console.print(f'There are {len(images_paths)} images in dir: {data_root}')
     np.random.seed(42)
@@ -161,7 +161,7 @@ def main():
 
     if save_dir is not None:
         now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
-        console.save_text(save_dir.joinpath(f"{args.log}_{now_date}.txt"))
+        console.save_text(save_dir.joinpath(f"{args.log}_{now_date}.txt").as_posix())
 
 
 if __name__ == '__main__':

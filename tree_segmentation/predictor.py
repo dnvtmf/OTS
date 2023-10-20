@@ -32,7 +32,7 @@ from segment_anything.utils.amg import (
 )
 from segment_anything.utils.transforms import ResizeLongestSide
 from tree_segmentation.tree_2d_segmentation import Tree2D
-from tree_segmentation.extension.utils import TimeWatcher, retry_if_cuda_oom
+from tree_segmentation.extension.utils import TimeWatcher
 
 
 # noinspection PyAttributeOutsideInit
@@ -149,21 +149,23 @@ class TreePredictor:
         self.timer = timer  # type: Optional[TimeWatcher]
 
     @torch.no_grad()
-    def tree_generate(self,
-                      image: np.ndarray,
-                      points_per_side: Optional[int] = 32,
-                      points_per_update: int = 256,
-                      min_mask_region_area: int = 50,
-                      max_steps=100,
-                      in_threshold=0.80,
-                      in_thre_area=10,
-                      union_threshold=0.10,
-                      ratio=0.5,
-                      sample_limit_fn=None,
-                      device=None,
-                      verbose=0,
-                      compress=True,
-                      tree2d: Tree2D = None) -> Tree2D:
+    def tree_generate(
+        self,
+        image: np.ndarray,
+        points_per_side: Optional[int] = 32,
+        points_per_update: int = 256,
+        min_mask_region_area: int = 50,
+        max_steps=100,
+        in_threshold=0.80,
+        in_thre_area=10,
+        union_threshold=0.10,
+        ratio=0.5,
+        sample_limit_fn=None,
+        device=None,
+        verbose=0,
+        compress=True,
+        tree2d: Tree2D = None
+    ) -> Tree2D:
         assert image.shape[-1] == 3
         if self.timer is not None:
             self.timer.start()
@@ -229,7 +231,7 @@ class TreePredictor:
             return data
         for (points,) in batch_iterator(self.points_per_batch, points):
             batch_data = self._process_batch(points, self.original_size, normalized=normalized)
-            batch_data['masks'] = batch_data['masks']  #.cpu()  # to avoid oom
+            batch_data['masks'] = batch_data['masks']  # .cpu()  # to avoid oom
             data.cat(batch_data)
             del batch_data
 
@@ -371,13 +373,15 @@ class TreePredictor:
         data["crop_boxes"] = torch.tensor([crop_box for _ in range(len(data["rles"]))])
         return data
 
-    def _process_batch(self,
-                       points: Union[np.ndarray, Tensor],
-                       im_size: Tuple[int, ...],
-                       orig_size: Tuple[int, ...] = None,
-                       crop_box: List[int] = None,
-                       normalized=True,
-                       compress=False) -> MaskData:
+    def _process_batch(
+        self,
+        points: Union[np.ndarray, Tensor],
+        im_size: Tuple[int, ...],
+        orig_size: Tuple[int, ...] = None,
+        crop_box: List[int] = None,
+        normalized=True,
+        compress=False
+    ) -> MaskData:
         # Run model on this batch
         if isinstance(points, Tensor):
             if normalized:
@@ -410,7 +414,7 @@ class TreePredictor:
 
         # Calculate stability score
         data["stability_score"] = calculate_stability_score(data["masks"], self.model.mask_threshold,
-                                                            self.stability_score_offset)
+            self.stability_score_offset)
         if self.stability_score_thresh > 0.0:
             keep_mask = data["stability_score"] >= self.stability_score_thresh
             data.filter(keep_mask)
@@ -522,7 +526,7 @@ class TreePredictor:
         if self.model_type == 'SAM':
             assert (len(transformed_image.shape) == 4 and transformed_image.shape[1] == 3 and
                     max(*transformed_image.shape[2:]) == self.model.image_encoder.img_size
-                   ), f"set_torch_image input must be BCHW with long side {self.model.image_encoder.img_size}."
+                    ), f"set_torch_image input must be BCHW with long side {self.model.image_encoder.img_size}."
         else:
             assert transformed_image.ndim == 4 and transformed_image.shape[1] == 3
         self.reset_image()

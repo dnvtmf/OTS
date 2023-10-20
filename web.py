@@ -183,6 +183,7 @@ class WebUI(TreeSegment):
         data = []
         for i in range(len(self.img_levels)):
             if i + 1 < len(self.levels_2d):
+                assert 0 < self.levels_2d[i + 1].min() and self.levels_2d[i + 1].max() < len(self.tree2d.parent)
                 masks = self.tree2d.masks[self.levels_2d[i + 1] - 1]
                 image = get_colored_masks(masks)
                 alpha = self.get_value('alpha', 0.3)

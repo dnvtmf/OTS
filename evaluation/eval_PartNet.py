@@ -5,7 +5,6 @@ import multiprocessing as mp
 import os
 import time
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import nvdiffrast.torch as dr
@@ -17,10 +16,10 @@ from rich.tree import Tree
 from torch import Tensor
 from tqdm import tqdm
 
-from evaluation.util import get_predictor, predictor_options, run_predictor
-from tree_segmentation import Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, render_mesh
-from tree_segmentation.extension import Mesh, ops_3d, utils
-from tree_segmentation.metric import TreeSegmentMetric
+from segmentation.tree_segmentation.evaluation.util import get_predictor, predictor_options, run_predictor
+from segmentation.tree_segmentation import Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, render_mesh
+from extension import Mesh, ops_3d, utils
+from segmentation.tree_segmentation.metric import TreeSegmentMetric
 
 
 def get_ground_truth(data, gt_tree: Tree3D, tree: Tree, part_names, part_map, node=0):
@@ -100,14 +99,14 @@ def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path, device):
 
 
 def get_images_best_view(
-  glctx,
-  mesh: Mesh,
-  image_size=1024,
-  num_views=100,
-  num_split=10,
-  seed=0,
-  fovy=60,
-  more_ratio=10
+    glctx,
+    mesh: Mesh,
+    image_size=1024,
+    num_views=100,
+    num_split=10,
+    seed=0,
+    fovy=60,
+    more_ratio=10
 ):
     if seed > 0:
         torch.manual_seed(seed)
@@ -228,14 +227,14 @@ def build_view_graph(area, tri_ids: Tensor, threshold=0.5, num_nearest=5):
 
 
 def run_fast_2d_semgentation(
-  cache_dir: Path,
-  mesh: Mesh,
-  images: Tensor,
-  tri_ids: Tensor,
-  Tw2vs: Tensor,
-  num_points=10,
-  steps=10,
-  predictor: TreePredictor = None,
+    cache_dir: Path,
+    mesh: Mesh,
+    images: Tensor,
+    tri_ids: Tensor,
+    Tw2vs: Tensor,
+    num_points=10,
+    steps=10,
+    predictor: TreePredictor = None,
 ):
     device = mesh.v_pos.device
     if predictor is None:
@@ -249,7 +248,6 @@ def run_fast_2d_semgentation(
     images = (images[:, :, :, :3] * 255).to(torch.uint8).cpu().numpy()
     _, H, W, _ = images.shape
     # first stage
-    tree2d = Tree2D()
     for i in range(N):
         predictor.set_image(images[i])
         features.append(utils.tensor_to(predictor.features, device=torch.device('cpu')))
@@ -277,6 +275,7 @@ def run_fast_2d_semgentation(
             for j in range(N):
                 if i == j or A[i, j] <= 0:
                     continue
+                # results[j]
                 masks = results[j].masks
                 for l, x in enumerate(results[j].get_levels()):
                     if l == 0:
@@ -312,15 +311,15 @@ def run_fast_2d_semgentation(
 
 @torch.no_grad()
 def eval_one(
-  args,
-  glctx: dr.RasterizeCudaContext,
-  device,
-  shape_root: Path,
-  cache_root: Path,
-  num_views=100,
-  epochs_ea=3000,
-  epochs_run=5000,
-  print: Any = print,
+    args,
+    glctx: dr.RasterizeCudaContext,
+    device,
+    shape_root: Path,
+    cache_root: Path,
+    num_views=100,
+    epochs_ea=3000,
+    epochs_run=5000,
+    print=print,
 ):
     print(f"Shape Dir", shape_root)
     cache_dir = cache_root.joinpath(f"{shape_root.name}")
@@ -438,13 +437,13 @@ def eval_one(
 
 
 def run_many(
-  args,
-  shapes,
-  data_root: Path,
-  cache_root: Path,
-  gpu_id=0,
-  que: mp.Queue = None,
-  metric: TreeSegmentMetric = None,
+    args,
+    shapes,
+    data_root: Path,
+    cache_root: Path,
+    gpu_id=0,
+    que: mp.Queue = None,
+    metric: TreeSegmentMetric = None,
 ):
     global console
     if console is None:
@@ -479,7 +478,7 @@ def run_many(
             torch.cuda.empty_cache()
             if que is not None:
                 que.put(None)
-            exit(1)
+            # exit(1)
         if metric is not None:
             console.print(', '.join(f'{k}: {utils.float2str(v)}' for k, v in metric.summarize().items()))
 
@@ -600,7 +599,7 @@ def main():
 
     if args.log:
         now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
-        console.save_text(cache_root.joinpath(f"{args.log}_{now_date}.txt"))
+        console.save_text(cache_root.joinpath(f"{args.log}_{now_date}.txt").as_posix())
 
 
 if __name__ == '__main__':

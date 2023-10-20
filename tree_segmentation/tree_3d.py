@@ -345,6 +345,7 @@ class TreeSegment:
     def run_tree_seg_2d_post(self):
         if self._tree_2d is not None:
             self.tree2d.post_process()
+            self.levels_2d = self.tree2d.get_levels()
 
     def new_camera_pose(self, *, Tw2v=None):
         if Tw2v is None:

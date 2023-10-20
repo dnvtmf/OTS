@@ -12,13 +12,13 @@ import torch_geometric.nn as pyg_nn
 import trimesh
 import trimesh.proximity
 from rich.console import Console
-from rich.tree import Tree
 from torch import Tensor
 from tqdm import tqdm
 
 from evaluation.util import get_predictor, predictor_options, run_predictor
-from tree_segmentation import (Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, random_camera_position,
-                               render_mesh)
+from tree_segmentation import (
+    Tree3D, Tree3Dv2, choose_best_views, random_camera_position, render_mesh,
+)
 from tree_segmentation.extension import Mesh, ops_3d, utils
 from tree_segmentation.metric import TreeSegmentMetric
 
@@ -28,15 +28,15 @@ console = None
 
 
 def get_images_best_view(
-        mesh: Mesh,
-        image_size=1024,
-        num_views=100,
-        num_split=10,
-        fovy=60,
-        phi_range=(0, 360),
-        theta_range=(30, 150),
-        dist_to_surface=0.2,
-        more_ratio=10,
+    mesh: Mesh,
+    image_size=1024,
+    num_views=100,
+    num_split=10,
+    fovy=60,
+    phi_range=(0, 360),
+    theta_range=(30, 150),
+    dist_to_surface=0.2,
+    more_ratio=10,
 ):
     view_box = mesh.AABB
     view_box[0] += dist_to_surface
@@ -79,10 +79,10 @@ def load_images(mesh: Mesh, image_dir: Path, num_views=1, fovy=60):
     Tw2vs = torch.load(image_dir.joinpath("Tw2v.pth"), map_location='cpu')[:num_views]
     images = []
     for i in range(num_views):
-        image = utils.load_image(image_dir.joinpath(f"{i:03d}.png"))  # type: np.ndarray
+        image = utils.load_image(image_dir.joinpath(f"{i:03d}.png"))
         image = torch.from_numpy(image.copy()).float() / 255.
         images.append(image)
-    images = torch.stack(images)  #NxHxWx3
+    images = torch.stack(images)  # NxHxWx3
     image_size = images.shape[2]
     Tv2c = ops_3d.perspective(fovy=math.radians(fovy), size=(image_size, image_size), device=device)
     Tw2c = Tv2c @ Tw2vs.to(device)
@@ -298,7 +298,7 @@ def main():
 
     # generate images
     image_dir = cache_dir.joinpath('images')
-    image_dir.mkdir(exist_ok=Tree)
+    image_dir.mkdir(exist_ok=True)
     run_2d = args.force_2d or len(list(cache_dir.glob(f"view_*.data"))) < args.num_views
     if args.force_view or run_2d or args.gt_2d:
         if args.force_view or len(list(image_dir.glob('*.png'))) < args.num_views:
@@ -417,7 +417,7 @@ def main():
     console.print(', '.join(f"{k}={v}" for k, v in metric.summarize().items()))
     if args.log:
         now_date = time.strftime("%m-%d_%H:%M:%S", time.localtime(time.time()))
-        console.save_text(cache_dir.joinpath(f"{args.log}_{now_date}.txt"))
+        console.save_text(cache_dir.joinpath(f"{args.log}_{now_date}.txt").as_posix())
 
 
 if __name__ == '__main__':

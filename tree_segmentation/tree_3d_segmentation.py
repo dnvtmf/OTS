@@ -15,7 +15,8 @@ import torch_geometric.nn as pyg_nn
 from scipy.optimize import linear_sum_assignment
 from tree_segmentation.extension import Mesh, utils
 from tree_segmentation.extension import ops_3d
-from tree_segmentation import TreeStructure, MaskData, Tree2D, extension as ext
+from tree_segmentation.tree_structure import TreeStructure
+from tree_segmentation import MaskData, Tree2D, extension as ext
 
 
 class Tree3D(TreeStructure):
@@ -127,12 +128,14 @@ class Tree3D(TreeStructure):
         eye = eye * (torch.rand((num, 1), device=device) * (radius_range[1] - radius_range[0]) + radius_range[0])
         return ops_3d.look_at(eye, torch.zeros_like(eye))
 
-    def proposal_camera_pose_cycle(self,
-                                   num=1,
-                                   radius_range=(2.5, 3.),
-                                   elev_range=(0, 180),
-                                   azim_range=(0, 360),
-                                   device=None):
+    def proposal_camera_pose_cycle(
+        self,
+        num=1,
+        radius_range=(2.5, 3.),
+        elev_range=(0, 180),
+        azim_range=(0, 360),
+        device=None
+    ):
         theta_range = (math.radians(elev_range[0]), math.radians(elev_range[1]))
         phi_range = (math.radians(azim_range[0]), math.radians(azim_range[1]))
         # phase 1
@@ -238,7 +241,7 @@ class Tree3D(TreeStructure):
                     self.score_node[now, 0] += 1
             self.update_tree()
         print('num_nodes:', sum(len(x) for x in self.get_levels()), 'num conflict:',
-              sum(len(x) for x in self.conflict_nodes), self.cnt)
+            sum(len(x) for x in self.conflict_nodes), self.cnt)
         # self.node_rearrange()
         # self.print_tree()
 
@@ -592,7 +595,7 @@ class Tree3Dv2(TreeStructure):
         # self.A = None  # type: Optional[Tensor]
         # self.view_G = None  # type: Optional[Tensor]
         self.M = 0  # the total number of masks for all views
-        self.V = 0  #  the total number of views
+        self.V = 0  # the total number of views
         ## results
         self.masks = None
         self.scores = None
@@ -1187,7 +1190,7 @@ class Tree3Dv2(TreeStructure):
             A: shape [M+V, M+V]
         """
         in_same = F.linear(P, P)  # P @ P.T # shape [M, M]
-        in_same * torch.maximum(A[:self.M, :self.M],)
+        in_same * torch.maximum(A[:self.M, :self.M], )
 
     def loss_masks_connection(self, P: Tensor, A: Tensor):
         """ All 2D masks belonging to the same 3D masks should be connected to each other, 
@@ -1410,15 +1413,15 @@ class Tree3Dv2(TreeStructure):
         return masks  # shape: [K, F]
 
     def calc_losses(
-            self,
-            logits: Tensor,
-            node_logits: Tensor,
-            view_index: int,
-            A: Tensor,
-            eps=1e-7,
-            progress=1.0,
-            timer: utils.TimeWatcher = None,
-            weights=dict(),
+        self,
+        logits: Tensor,
+        node_logits: Tensor,
+        view_index: int,
+        A: Tensor,
+        eps=1e-7,
+        progress=1.0,
+        timer: utils.TimeWatcher = None,
+        weights=dict(),
     ) -> Dict[str, Tensor]:
         losses = {}  # type: Dict[str, Tensor]
         if progress < 0 or progress == 1.:
@@ -1797,6 +1800,5 @@ class AutoEncoder(nn.Module):
         if only_encoder:
             return features
         return features, self.decoder(features)
-
 
 # 相机间距离由重合的triangle的数量决定
