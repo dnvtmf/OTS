@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Optional, Union
 
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -224,6 +225,8 @@ class Tree2D(TreeStructure):
             masks, scores = masks.masks, masks.scores
         elif isinstance(masks, Tensor):
             masks = Masks(masks, format=self.format)
+        elif isinstance(masks, np.ndarray):
+            masks = Masks(torch.from_numpy(masks).to(self.device), format=self.format)
         if scores is None:
             scores = torch.ones(masks.shape[0], device=masks.device)
         num_ignored = 0
@@ -408,6 +411,24 @@ class Tree2D(TreeStructure):
         if self.verbose > 0:
             print(f'[Tree2D] loaded from file {filename} or input data')
         return extra
+
+    def load_from_png(self, mask_dir: Path, filename: str):
+        mask_paths = sorted(list(mask_dir.glob(f"{filename}_level_*.png")))
+        self.reset()
+        for i, mask_path in enumerate(mask_paths):
+            level = int(mask_path.stem.split('_')[-1])
+            assert i + 1 == level, f"Except load level {i + 1}, but got {level} "
+            mask = utils.load_image(mask_path)
+            mask_ids = np.unique(mask)
+            if mask_ids[0] == 0:
+                mask_ids = mask_ids[1:]
+            if len(mask_ids) == 0:
+                continue
+            masks = mask == mask_ids[:, None, None]
+            self.insert_batch(masks)
+        self.update_tree()
+        self.node_rearrange()
+        return self
 
     def to(self, device):
         super().to(device)

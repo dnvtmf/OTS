@@ -7,6 +7,14 @@ from tree_segmentation.extension._C import get_C_function, have_C_functions
 
 
 class Masks:
+    """ the structure of segmentation masks
+
+    Args:
+        data: shape [..., H, W] or [M] binary or encoded masks
+        start: shape None or [..., H];
+        shape: None or (..., H, W)
+        format: BINARY, 'bin' or ENCODED 'enc'
+    """
     BINARY = 'bin'  # binary mask
     ENCODED = 'enc'  # using run-length encoding (RLE), but only encode last dim
 
@@ -14,7 +22,7 @@ class Masks:
     eps = 1e-7
 
     def __init__(self, data: Tensor, start: Tensor = None, shape=None, format=ENCODED) -> None:
-        if start is None and shape is None:
+        if start is None:
             assert data.dtype == torch.bool
             self.data = data
             self._shape = None
@@ -86,15 +94,15 @@ class Masks:
             return self
         # engine == python
         mask = torch.zeros(self._shape, dtype=torch.bool, device=self.start.device).flatten(0, -2)
-        N = self._shape[-1]
-        for i in range(len(self.start)):
-            s = self.start[i]
-            e = len(self.data) if i + 1 == len(self.start) else self.start[i + 1]
+        start = self.start.view(-1)
+        for i in range(len(start)):
+            s = start[i]
+            e = len(self.data) if i + 1 == len(start) else start[i + 1]
             n = 0
             for j in range(s + 1, e, 2):
-                n += self.data[j - 1]
-                mask[i, n:n + self.data[j]] = 1
-                n += self.data[j]
+                n = n + self.data[j - 1].item()
+                mask[i, n:n + self.data[j].item()] = 1
+                n = n + self.data[j].item()
         self.data = mask.view(self._shape)
         self._shape = None
         self.start = None

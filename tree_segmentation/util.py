@@ -17,7 +17,7 @@ __all__ = [
 ]
 
 
-def color_mask(mask: np.ndarray, max_value=None):
+def color_mask(mask: np.ndarray, max_value=None, channels=3):
     if max_value is None:
         max_value = mask.max()  # noqa
     mask = mask.astype(np.int32)
@@ -25,12 +25,14 @@ def color_mask(mask: np.ndarray, max_value=None):
     # random_order = np.arange(max_value + 2)
     # random_order[1:] = np.random.permutation(random_order[1:])
     colors = np.array([[1, 1, 1]] + sns.color_palette(n_colors=max_value))
+    if channels == 4:
+        colors = np.concatenate([colors, np.ones_like(colors[:, :1])], axis=-1)
     mask_image = colors[mask]
     # mask_image = np.where(mask[:, :, None] == 0, 1., mask_image)
-    return mask_image[..., :3].astype(np.float32)
+    return mask_image.astype(np.float32)
 
 
-def get_colored_masks(*masks):
+def get_colored_masks(*masks, channels=3):
     if len(masks) == 1 and isinstance(masks[0], (tuple, list)):
         masks = masks[0]
     all_masks = []
@@ -51,7 +53,7 @@ def get_colored_masks(*masks):
     else:
         all_masks = np.concatenate(all_masks, axis=0)
         one_mask = np.max(all_masks.astype(np.uint8) * np.arange(1, all_masks.shape[0] + 1)[:, None, None], axis=0)
-    return color_mask(one_mask, len(all_masks))
+    return color_mask(one_mask, len(all_masks), channels=channels)
 
 
 def show_masks(image, *masks, mask=None, alpha=None):

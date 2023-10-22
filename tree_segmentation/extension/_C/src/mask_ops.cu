@@ -3,10 +3,10 @@
 
 namespace tree_seg {
 using torch::Tensor;
-#define DISPATCH_CASE_MY_TYPES(...)                   \
-  AT_DISPATCH_CASE(at::ScalarType::Byte, __VA_ARGS__) \
-  AT_DISPATCH_CASE(at::ScalarType::Int, __VA_ARGS__)  \
-  AT_DISPATCH_CASE(at::ScalarType::Short, __VA_ARGS__)
+#define DISPATCH_CASE_MY_TYPES(...)            \
+  AT_DISPATCH_CASE(torch::kUInt8, __VA_ARGS__) \
+  AT_DISPATCH_CASE(torch::kInt16, __VA_ARGS__) \
+  AT_DISPATCH_CASE(torch::kInt32, __VA_ARGS__)
 
 #define DISPATCH_MY_TYPES(TYPE, NAME, ...) AT_DISPATCH_SWITCH(TYPE, NAME, DISPATCH_CASE_MY_TYPES(__VA_ARGS__))
 
@@ -32,8 +32,10 @@ Tensor mask_to_binary(int W, Tensor& start, Tensor& counts) {
   Tensor out = torch::zeros(at::IntArrayRef(out_shape), torch::TensorOptions().dtype(at::kBool).device(start.device()));
   CHECK_CONTIGUOUS(start);
   CHECK_CONTIGUOUS(counts);
-  BCNN_ASSERT(start.scalar_type() == at::kInt, "start must be int32");
-  DISPATCH_MY_TYPES(counts.type(), "mask_to_binary", [&] {
+  BCNN_ASSERT(start.scalar_type() == torch::kInt32, "start must be int32");
+  BCNN_ASSERT(start.device() == counts.device(), "start and counts must be same device");
+
+  DISPATCH_MY_TYPES(counts.scalar_type(), "mask_to_binary", [&] {
     if (start.is_cuda()) {
       if (start.numel() > 0) {
         mask_to_binary_kernel<scalar_t> KERNEL_ARG(start.numel(), WARP_SIZE)(
@@ -41,13 +43,18 @@ Tensor mask_to_binary(int W, Tensor& start, Tensor& counts) {
         CHECK_CUDA_ERROR("mask_to_binary");
       }
     } else {
-      bool* out_ptr = out.data<bool>();
+      bool* out_ptr            = out.data<bool>();
+      const int32_t* start_ptr = start.data_ptr<int32_t>();
       for (int k = 0; k < start.numel(); k++) {
-        auto* c_ptr = counts.data_ptr<scalar_t>() + start.data_ptr<int32_t>()[k];
-        bool v      = 0;
-        for (int x = 0, e = *c_ptr; x < W; ++x) {
-          if (x == e) v ^= 1, e += *(++c_ptr);
-          *(out_ptr++) = v;
+        int s       = start_ptr[k];
+        int e       = k + 1 == start.numel() ? counts.numel() : start_ptr[k + 1];
+        auto* c_ptr = counts.data_ptr<scalar_t>();
+        bool* out_k = out_ptr + k * W;
+        for (int j = s + 1, i = 0; j < e; j += 2) {
+          i += c_ptr[j - 1];
+          for (int c = 0; c < c_ptr[j]; ++c, ++i) {
+            out_k[i] = true;
+          }
         }
       }
     }

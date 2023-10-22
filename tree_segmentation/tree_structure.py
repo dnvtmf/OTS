@@ -164,6 +164,17 @@ class TreeStructure:
             i = self.parent[i].item()
         return depth
 
+    @property
+    def max_depth(self):
+        num_depth = 0
+        x = torch.arange(self.cnt, device=self.device)
+        x = x[x > 0]
+        while len(x) > 0:
+            x = self.parent[x]
+            x = x[x > 0]
+            num_depth += 1
+        return num_depth
+
     def node_rearrange(self, indices=None):
         if self.verbose > 0:
             print(f'[Tree] rerange nodes')
