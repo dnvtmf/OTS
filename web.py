@@ -351,7 +351,8 @@ class WebUI(TreeSegment):
         return restuls
 
     # 生成图片
-    def render(self, n=10):
+    def render(self):
+        n = self.get_value('num_images', 100)
         # n为图片数量
         self.mesh_name = self.mesh_paths[self.mesh_index].replace('/', '_').split(".")[0]
         print(self.mesh_name)
@@ -392,7 +393,8 @@ class WebUI(TreeSegment):
         return self.image_list
 
     # 只保存Tw2vs
-    def render_v2(self, n=10):
+    def render_v2(self):
+        n = self.get_value('num_images', 100)
         # n为图片数量
         self.mesh_name = self.mesh_paths[self.mesh_index].replace('/', '_').split(".")[0]
         print(self.mesh_name)
