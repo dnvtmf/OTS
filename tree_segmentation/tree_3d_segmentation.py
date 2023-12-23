@@ -1463,7 +1463,7 @@ class Tree3Dv2(TreeStructure):
             with torch.no_grad():
                 masks_2d = []
                 for i in range(s, e):
-                    assert 0 <= self.indices_2d[i] and self.indices_2d[i] < len(self.masks_2d)
+                    assert 0 <= self.indices_2d[i] < len(self.masks_2d)
                     masks_2d.append(self.masks_2d[self.indices_2d[i]] == (i + 1))
                 masks_2d = torch.stack(masks_2d, dim=0).float()
         else:

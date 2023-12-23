@@ -87,15 +87,15 @@ class TreeSegmentGUI(TreeSegment):
             self.view_2d = ImageViewer(size=(512, 512), tag='image_sample', pos=(512, 0), no_resize=True, no_move=True)
             self.view_seg = ImageViewer(size=(512, 512), tag='image_seg', pos=(512, 512), no_resize=True, no_move=True)
             with dpg.window(
-              label='control',
-              tag='control',
-              width=512,
-              height=512 - 30,
-              pos=(0, 512),
-              no_close=True,
-              no_resize=True,
-              no_move=True,
-              # no_title_bar=True,
+                label='control',
+                tag='control',
+                width=512,
+                height=512 - 30,
+                pos=(0, 512),
+                no_close=True,
+                no_resize=True,
+                no_move=True,
+                # no_title_bar=True,
             ):
                 # self.add_menu_bar()
                 self.make_control_panel()
@@ -1171,6 +1171,9 @@ class TreeSegmentGUI(TreeSegment):
                 return change
 
             with dpg.popup(dpg.last_item(), mousebutton=dpg.mvMouseButton_Left, modal=False, tag='win_change_model'):
+                dpg.add_button(label='SAM-Fast', callback=change_model('SAM-Fast'))
+                dpg.add_button(label='SAM-Fast-L', callback=change_model('SAM-Fast-L'))
+                dpg.add_button(label='SAM-Fast-B', callback=change_model('SAM-Fast-B'))
                 dpg.add_button(label='SAM', callback=change_model('SAM'))
                 dpg.add_button(label='SAM-L', callback=change_model('SAM-L'))
                 dpg.add_button(label='SAM-B', callback=change_model('SAM-B'))
@@ -1285,13 +1288,13 @@ class TreeSegmentGUI(TreeSegment):
 
     def make_edit_2d_options(self):
         with dpg.file_dialog(
-          directory_selector=False,
-          show=False,
-          callback=self.change_image,
-          id="choose_image",
-          width=700,
-          height=400,
-          default_path=self.image_dir.as_posix(),
+            directory_selector=False,
+            show=False,
+            callback=self.change_image,
+            id="choose_image",
+            width=700,
+            height=400,
+            default_path=self.image_dir.as_posix(),
         ):
             dpg.add_file_extension("Image{.png,.jpg,.jpeg,.tif}", custom_text='[Image]')
         with dpg.group(horizontal=True):
@@ -1351,14 +1354,14 @@ class TreeSegmentGUI(TreeSegment):
             # print('need update view3d')
 
         with dpg.file_dialog(
-          # directory_selector=False,
-          show=False,
-          callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
-          id="choose_mesh",
-          width=700,
-          height=400,
-          default_path='/home/wan/data/meshes',
-          modal=True,
+            # directory_selector=False,
+            show=False,
+            callback=lambda sender, app_data: self.load_mesh(app_data['file_path_name']),
+            id="choose_mesh",
+            width=700,
+            height=400,
+            default_path='/home/wan/data/meshes',
+            modal=True,
         ):
             dpg.add_file_extension("Mesh{.obj,.ply}", custom_text='mesh')
             with dpg.group(horizontal=True):

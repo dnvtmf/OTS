@@ -16,10 +16,10 @@ from rich.tree import Tree
 from torch import Tensor
 from tqdm import tqdm
 
-from segmentation.tree_segmentation.evaluation.util import get_predictor, predictor_options, run_predictor
-from segmentation.tree_segmentation import Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, render_mesh
-from extension import Mesh, ops_3d, utils
-from segmentation.tree_segmentation.metric import TreeSegmentMetric
+from evaluation.util import get_predictor, predictor_options, run_predictor
+from tree_segmentation import Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, render_mesh
+from tree_segmentation.extension import Mesh, ops_3d, utils
+from tree_segmentation.metric import TreeSegmentMetric
 
 
 def get_ground_truth(data, gt_tree: Tree3D, tree: Tree, part_names, part_map, node=0):

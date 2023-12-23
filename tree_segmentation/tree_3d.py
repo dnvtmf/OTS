@@ -14,14 +14,18 @@ from tree_segmentation.extension import ops_3d
 from semantic_sam import SemanticSAM, semantic_sam_l, semantic_sam_t
 import tree_segmentation as tree_segmentation
 from segment_anything.build_sam import Sam, build_sam, build_sam_vit_b, build_sam_vit_l
+from segment_anything_fast.build_sam import build_sam_fast, build_sam_fast_vit_b, build_sam_fast_vit_l
+from segment_anything_fast.build_sam import Sam as SamFast
 from tree_segmentation import MaskData, Tree2D, TreePredictor, Tree3Dv2
 from tree_segmentation.render import render_mesh
 from tree_segmentation.util import get_hash_name
 
+MODEL_TYPE = Optional[Union[Sam, SemanticSAM, SamFast]]
+
 
 class TreeSegment:
 
-    def __init__(self, args, model: Optional[Union[Sam, SemanticSAM]] = None) -> None:
+    def __init__(self, args, model: MODEL_TYPE = None) -> None:
         self.cfg = args
         self.device = torch.device('cuda:0')
         self.glctx = dr.RasterizeCudaContext()
@@ -33,8 +37,8 @@ class TreeSegment:
         self.cache_root.mkdir(exist_ok=True)
         self.cache_dir = self.cache_root
 
-        self._model_type = 'SAM'
-        self._model: Optional[Union[Sam, SemanticSAM]] = model
+        self._model_type = 'SAM-Fast'
+        self._model: MODEL_TYPE = model
         self._mesh: Optional[Mesh] = None
         self._predictor: Optional[TreePredictor] = None
 
@@ -64,6 +68,7 @@ class TreeSegment:
         return self._model
 
     def load_model(self):
+        torch.cuda.empty_cache()
         print('Loading model...')
         if self._model_type == 'SAM':
             self._model = build_sam(self.get_value('sam_path')).to(self.device)
@@ -72,6 +77,13 @@ class TreeSegment:
             self._model = build_sam_vit_l(self.get_value('sam_l_path')).to(self.device)
         elif self._model_type == 'SAM-B':
             self._model = build_sam_vit_b(self.get_value('sam_b_path')).to(self.device)
+        if self._model_type == 'SAM-Fast':
+            self._model = build_sam_fast(self.get_value('sam_path')).to(self.device)
+            # predictor = SamPredictor(sam)
+        elif self._model_type == 'SAM-Fast-L':
+            self._model = build_sam_fast_vit_l(self.get_value('sam_l_path')).to(self.device)
+        elif self._model_type == 'SAM-FAset-B':
+            self._model = build_sam_fast_vit_b(self.get_value('sam_b_path')).to(self.device)
         elif self._model_type == 'Semantic-SAM-L':
             self._model = semantic_sam_l(self.get_value('semantic_sam_l_path')).to(self.device)
         elif self._model_type == 'Semantic-SAM-T':

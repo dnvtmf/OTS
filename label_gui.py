@@ -24,9 +24,12 @@ from tree_segmentation.util import get_colored_masks, image_add_mask_boundary
 
 class LabelGUI:
     def __init__(self):
-        self.image_dir = Path('~/data/NeRF/D_NeRF/lego/train').expanduser()
-        self.seg_2d_dir = Path('~/data/NeRF/D_NeRF/lego/tree_seg/train').expanduser()
-        self.cache_dir = Path('./results/D_NeRF/lego')
+        scene = 'jumpingjacks'
+        split = 'train'
+        self.image_dir = Path(f'~/data/NeRF/D_NeRF/{scene}/{split}').expanduser()
+        self.seg_2d_dir = Path(f'~/data/NeRF/D_NeRF/{scene}/tree_seg/{split}').expanduser()
+        self.split = split
+        self.cache_dir = Path(f'./results/D_NeRF/{scene}')
         self.cache_dir.mkdir(exist_ok=True, parents=True)
         self.image_paths = sorted(list(self.image_dir.glob('*.png')))
         self.images = np.stack([utils.load_image(path) for path in self.image_paths])
@@ -216,6 +219,7 @@ class LabelGUI:
         with dpg.group(horizontal=True):
             dpg.add_button(label='Load', width=50, height=30, callback=self.load_results)
             dpg.add_button(label='Save', width=50, height=30, callback=self.save_results)
+            dpg.add_checkbox(label='auto crop', tag='auto_crop', default_value=True)
         with dpg.group(horizontal=True):
             def last_image_page():
                 total = self.num_col * self.num_row
@@ -457,7 +461,7 @@ class LabelGUI:
                     while c == 0 and k > 0:
                         k = self.tree[k]['parent']
                         c = self.tree[k]['masks'][j]
-                    if c > 0:
+                    if c > 0 and dpg.get_value('auto_crop'):
                         self.focus_on_mask(j, self.tree2d[j].masks[c - 1])
                     self.show_mask_ids[j] = self.tree2d[j].get_children(c)
                 self.update_viewer.append(-1)
@@ -538,13 +542,13 @@ class LabelGUI:
             print('H is pressed')
 
     def save_results(self):
-        torch.save(self.tree, self.cache_dir.joinpath('temp.pth'))
-        print(f'Save tree to {self.cache_dir.joinpath("temp.pth")}')
+        torch.save(self.tree, self.cache_dir.joinpath(f'{self.split}.pth'))
+        print(f'Save tree to {self.cache_dir.joinpath(f"{self.split}.pth")}')
 
     def load_results(self):
-        if self.cache_dir.joinpath('temp.pth').exists():
-            self.tree = torch.load(self.cache_dir.joinpath('temp.pth'), map_location='cpu')
-            print(f"Load tree from {self.cache_dir.joinpath('temp.pth')}")
+        if self.cache_dir.joinpath(f'{self.split}.pth').exists():
+            self.tree = torch.load(self.cache_dir.joinpath(f'{self.split}.pth'), map_location='cpu')
+            print(f"Load tree from {self.cache_dir.joinpath(f'{self.split}.pth')}")
             self.tree_node_num = max(self.tree_node_num, max(self.tree.keys()) + 1)
             self.tree_node_now = 0
             self.tree_arrange()

@@ -10,7 +10,7 @@ pip install git+https://github.com/NVlabs/nvdiffrast
 conda activate tree_seg
 
 cd semantic_sam/ops
-bash ./build.sh
+bash ./make.sh
 
 cd tree_segmentation/extension/_C
 python setup.py build_ext --inplace

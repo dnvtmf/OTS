@@ -11,6 +11,7 @@ from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
 
 from semantic_sam import SemanticSAM
 from segment_anything.modeling import Sam
+from segment_anything_fast.modeling import Sam as SamFast
 from segment_anything.utils.amg import (
     build_point_grid,
     MaskData,
@@ -103,7 +104,7 @@ class TreePredictor:
         """
 
         self.model = model
-        if isinstance(model, Sam):
+        if isinstance(model, (Sam, SamFast)):
             self.model_type = "SAM"
             self.transform = ResizeLongestSide(self.model.image_encoder.img_size)
         elif isinstance(model, SemanticSAM):
@@ -535,7 +536,8 @@ class TreePredictor:
         self.input_size = tuple(transformed_image.shape[-2:])
         input_image = self.model.preprocess(transformed_image)
         if self.model_type == 'SAM':
-            self.features = self.model.image_encoder(input_image)
+            model_dtype = self.model.mask_decoder.iou_prediction_head.layers[0].weight.dtype
+            self.features = self.model.image_encoder(input_image.to(model_dtype))
         else:
             with torch.autocast(device_type='cuda', dtype=torch.float16):
                 features = self.model.backbone(input_image)
@@ -610,9 +612,9 @@ class TreePredictor:
         )
 
         if return_numpy:
-            masks_np = masks[0].detach().cpu().numpy()
-            iou_predictions_np = iou_predictions[0].detach().cpu().numpy()
-            low_res_masks_np = low_res_masks[0].detach().cpu().numpy()
+            masks_np = masks[0].detach().cpu().float().numpy()
+            iou_predictions_np = iou_predictions[0].detach().cpu().float().numpy()
+            low_res_masks_np = low_res_masks[0].detach().cpu().float().numpy()
             return masks_np, iou_predictions_np, low_res_masks_np
         else:
             return masks[0], iou_predictions[0], low_res_masks[0]
@@ -702,9 +704,19 @@ class TreePredictor:
                 multimask_output=multimask_output,
             )
             # print('iou_predictions, low_res_masks:', utils.show_shape(iou_predictions, low_res_masks))
-
-        # Upscale the masks to the original image resolution
-        masks = self.model.postprocess_masks(low_res_masks, self.input_size, self.original_size)
+        if getattr(low_res_masks, 'is_nested', False):
+            masks = []
+            for lrm, input_size, original_size in zip(low_res_masks.unbind(),
+                self.input_size,
+                self.original_size,
+                strict=True):
+                # Upscale the masks to the original image resolution
+                m = self.model.postprocess_masks(lrm, input_size, original_size)
+                masks.append(m)
+            masks = torch.nested.nested_tensor(masks, layout=torch.strided)
+        else:
+            # Upscale the masks to the original image resolution
+            masks = self.model.postprocess_masks(low_res_masks, self.input_size, self.original_size)
 
         if not return_logits:
             masks = masks > self.model.mask_threshold
