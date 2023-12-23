@@ -51,8 +51,8 @@ sam_model_registry = {
     "vit_b": build_sam_vit_b,
 }
 
-def _apply_eval_dtype_sam(model, dtype):
 
+def _apply_eval_dtype_sam(model, dtype):
     def prep_model(model, dtype):
         if dtype is not None:
             return model.eval().to(dtype)
@@ -64,25 +64,33 @@ def _apply_eval_dtype_sam(model, dtype):
 
     return model
 
+
 def build_sam_fast_vit_h(checkpoint=None, compile_mode='max-autotune', dtype=torch.bfloat16):
     sam = build_sam_vit_h(checkpoint)
     sam = _apply_eval_dtype_sam(sam, dtype)
-    sam.image_encoder = torch.compile(sam.image_encoder, mode=compile_mode)
+    if torch.cuda.get_device_capability()[0] >= 7:
+        sam.image_encoder = torch.compile(sam.image_encoder, mode=compile_mode)
     return sam
 
+
 build_sam_fast = build_sam_fast_vit_h
+
 
 def build_sam_fast_vit_l(checkpoint=None, compile_mode='max-autotune', dtype=torch.bfloat16):
     sam = build_sam_vit_l(checkpoint)
     sam = _apply_eval_dtype_sam(sam, dtype)
-    sam.image_encoder = torch.compile(sam.image_encoder, mode=compile_mode)
+    if torch.cuda.get_device_capability()[0] >= 7:
+        sam.image_encoder = torch.compile(sam.image_encoder, mode=compile_mode)
     return sam
+
 
 def build_sam_fast_vit_b(checkpoint=None, compile_mode='max-autotune', dtype=torch.bfloat16):
     sam = build_sam_vit_b(checkpoint)
     sam = _apply_eval_dtype_sam(sam, dtype)
-    sam.image_encoder = torch.compile(sam.image_encoder, mode=compile_mode)
+    if torch.cuda.get_device_capability()[0] >= 7:
+        sam.image_encoder = torch.compile(sam.image_encoder, mode=compile_mode)
     return sam
+
 
 sam_model_fast_registry = {
     "default": build_sam_fast_vit_h,

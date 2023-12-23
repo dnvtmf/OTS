@@ -512,7 +512,7 @@ console = None
 def options():
     parser = argparse.ArgumentParser('3D Tree Segmentation for PartNet')
     parser.add_argument(
-        '-o', '--output', default='./results/cache/PartNet', help='The directory to cache tree3d results')
+        '-o', '--output', default='./results/PartNet', help='The directory to cache tree3d results')
     parser.add_argument('--data-root', default='~/data/PartNet/data_v0', help="The root path of PartNet dataset")
     parser.add_argument('-s', '--split', default='', help='The split to test')
     parser.add_argument('-v', '--num-views', default=100, type=int, help='The number of rendered views')

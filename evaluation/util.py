@@ -20,7 +20,8 @@ def predictor_options(parser: argparse.ArgumentParser):
     group.add_argument('-samH', '--segment-anything-h', action='store_true', default=False)
     group.add_argument('-samL', '--segment-anything-l', action='store_true', default=False)
     group.add_argument('-samB', '--segment-anything-b', action='store_true', default=False)
-    group.add_argument('--sam-origin', action='store_true', default=False, help='Use original rather than fast version')
+    group.add_argument('--sam-fast', action='store_true', default=False,
+        help='using segment anything fast')
 
     group.add_argument('-ssl', '--semantic-sam-l', action='store_true', default=False, help='Default')
     group.add_argument('-sst', '--semantic-sam-t', action='store_true', default=False)
@@ -52,7 +53,7 @@ def get_predictor(args=None, print=print, device=torch.device('cuda')):
     model_dir = Path(args.weights).expanduser()
     if args.segment_anything or args.segment_anything_h:
         assert model_dir.joinpath('sam_vit_h_4b8939.pth').exists(), f"Not model 'sam_vit_h_4b8939.pth' in {model_dir}"
-        if args.sam_origin:
+        if not args.sam_fast:
             model = build_sam(model_dir.joinpath('sam_vit_h_4b8939.pth'))
             print('Loaded Origin Model SAM')
         else:
@@ -61,7 +62,7 @@ def get_predictor(args=None, print=print, device=torch.device('cuda')):
     elif args.segment_anything_l:
         assert model_dir.joinpath('sam_vit_l_0b3195.pth').exists(), f"Not model 'sam_vit_l_0b3195.pth' in {model_dir}"
 
-        if args.sam_origin:
+        if not args.sam_fast:
             model = build_sam_vit_l(model_dir.joinpath('sam_vit_l_0b3195.pth'))
             # save_root.joinpath('SAM')
             print('Loaded Origin Model SAM-L')
@@ -71,8 +72,7 @@ def get_predictor(args=None, print=print, device=torch.device('cuda')):
             print('Loaded Fast Model SAM-L')
     elif args.segment_anything_b:
         assert model_dir.joinpath('sam_vit_b_01ec64.pth').exists(), f"Not model 'sam_vit_b_01ec64.pth' in {model_dir}"
-
-        if args.sam_origin:
+        if not args.sam_fast:
             model = build_sam_vit_b(model_dir.joinpath('sam_vit_b_01ec64.pth'))
             # save_root.joinpath('SAM')
             print('Loaded Origin Model SAM-B')
