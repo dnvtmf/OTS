@@ -82,6 +82,7 @@ include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
 
 ## find sources files
 set(SOURCE_DIR "src")
+LIST(APPEND SOURCE_DIR "src/gaussian_render")
 foreach(SRC_DIR IN LISTS SOURCE_DIR)
   set(SRC_TEMP)
   aux_source_directory(${SRC_DIR} SRC_TEMP)

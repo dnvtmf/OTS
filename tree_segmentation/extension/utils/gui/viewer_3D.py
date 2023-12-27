@@ -152,6 +152,9 @@ class Viewer3D(ImageViewer):
             self.up = up
         self.need_update = True
 
+    def set_need_update(self, need_update=True):
+        self.need_update = need_update
+
 
 def simple_3d_viewer(rendering, size=(400, 400)):
     dpg.create_context()

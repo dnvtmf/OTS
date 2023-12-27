@@ -68,6 +68,71 @@ def scale(s: float, device=None):
 
 
 ## 世界坐标系相关
+
+def convert_coord_system(T: Tensor, src='opengl', dst='opengl', inverse=False) -> Tensor:
+    """ convert coordiante system from <source> to <goal>: p_dst = M @ p_src
+    Args:
+        T: transformation matrix with shape [..., 4, 4], can be Tw2v or Tv2w
+        src: the source coordinate system, must be blender, colmap, opencv, llff, PyTorch3d, opengl
+        dst: the destination coordinate system
+        inverse: inverse apply (used when T is Tv2w)
+    Returns:
+        Tensor: converted transformation matrix
+    """
+    if src == dst:
+        return T
+    if inverse:
+        src, dst = dst, src
+    mapping = {
+        'opengl': 'opengl',
+        'blender': 'blender',
+        'colmap': 'opencv',
+        'opencv': 'opencv',
+        'llff': 'llff',
+        'pytorch3d': 'pytorch3d',
+    }
+    src = mapping[src.lower()]
+    dst = mapping[dst.lower()]
+    if src == 'opengl':
+        M = T.new_tensor({
+            'blender': [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1.]],
+            'opencv': [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1.]],
+            'llff': [[0, -1, 0, 0], [0, 0, 1, 0], [-1, 0, 0, 0], [0, 0, 0, 1.]],
+            'pytorch3d': [[0, 0, -1, 0], [0, 1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1.]],
+        }[dst])
+    elif src == 'blender':
+        M = T.new_tensor({
+            'opengl': [[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1.]],
+            'opencv': [[1, 0, 0, 0], [0, 0, -1, 0], [0, 1, 0, 0], [0, 0, 0, 1.]],
+            'llff': [[0, 0, -1, 0], [0, -1, 0, 0], [-1, 0, 0, 0], [0, 0, 0, 1.]],
+            'pytorch3d': [[0, 1, 0, 0], [0, 0, 1, 0], [1, 0, 0, 0], [0, 0, 0, 1.]],
+        }[dst])
+    elif src == 'opencv':
+        M = T.new_tensor({
+            'opengl': [[1, 0, 0, 0], [0, -1, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1.]],
+            'blender': [[1, 0, 0, 0], [0, 0, 1, 0], [0, -1, 0, 0], [0, 0, 0, 1.]],
+            'llff': [[0, 1, 0, 0], [0, 0, -1, 0], [-1, 0, 0, 0], [0, 0, 0, 1.]],
+            'pytorch3d': [[0, 0, 1, 0], [0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1.]],
+        }[dst])
+    elif src == 'llff':
+        M = T.new_tensor({
+            'opengl': [[0, 0, -1, 0], [-1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1.]],
+            'blender': [[0, 0, -1, 0], [0, -1, 0, 0], [-1, 0, 0, 0], [0, 0, 0, 1.]],
+            'opencv': [[0, 0, -1, 0], [1, 0, 0, 0], [0, -1, 0, 0], [0, 0, 0, 1.]],
+            'pytorch3d': [[0, -1, 0, 0], [-1, 0, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1.]],
+        }[dst])
+    elif src == 'pytorch3d':
+        M = T.new_tensor({
+            'opengl': [[0, 0, 1, 0], [0, 1, 0, 0], [-1, 0, 0, 0], [0, 0, 0, 1.]],
+            'blender': [[0, 0, 1, 0], [1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 0, 1.]],
+            'opencv': [[0, 0, 1, 0], [0, -1, 0, 0], [1, 0, 0, 0], [0, 0, 0, 1.]],
+            'llff': [[0, -1, 0, 0], [-1, 0, 0, 0], [0, 0, -1, 0], [0, 0, 0, 1.]],
+        }[dst])
+    else:
+        raise NotImplementedError(f"src={src}, dst={dst}")
+    return T @ M if inverse else M @ T
+
+
 def coord_spherical_to(radius: Tensor, thetas: Tensor, phis: Tensor) -> Tensor:
     """ 球坐标系 转 笛卡尔坐标系(OpenGL)
 
@@ -214,6 +279,45 @@ def perspective(fovy=0.7854, aspect=1.0, n=0.1, f=1000.0, device=None, size=None
     Tv2c[..., 2, 2] = -(f + n) / (f - n)
     Tv2c[..., 2, 3] = -(2 * f * n) / (f - n)
     Tv2c[..., 3, 2] = -1
+    return Tv2c
+
+
+def perspective_v2(fovy=0.7854, aspect=1.0, n=0.1, f=1000.0, device=None, size=None):
+    """透视投影矩阵
+
+    Args:
+        fovy: 弧度. Defaults to 0.7854.
+        aspect: 长宽比W/H. Defaults to 1.0.
+        n: near. Defaults to 0.1.
+        f: far. Defaults to 1000.0.
+        device: Defaults to None.
+        size: (W, H)
+
+    Returns:
+        Tensor: 透视投影矩阵
+    """
+    shape = []
+    if size is not None:
+        aspect = size[0] / size[1]
+    for x in [fovy, aspect, n, f]:
+        if isinstance(x, Tensor):
+            shape = x.shape
+    Tv2c = torch.zeros(*shape, 4, 4, dtype=torch.float, device=device)
+    y = np.tan(fovy * 0.5)
+    x = y * aspect
+    top = y * n
+    bottom = -top
+    right = x * n
+    left = -right
+    z_sign = 1.0
+
+    Tv2c[..., 0, 0] = 2.0 * n / (right - left)
+    Tv2c[..., 1, 1] = 2.0 * n / (top - bottom)
+    Tv2c[..., 0, 2] = (right + left) / (right - left)
+    Tv2c[..., 1, 2] = (top + bottom) / (top - bottom)
+    Tv2c[..., 3, 2] = z_sign
+    Tv2c[..., 2, 2] = z_sign * f / (f - n)
+    Tv2c[..., 2, 3] = -(f * n) / (f - n)
     return Tv2c
 
 

@@ -1,7 +1,16 @@
 #pragma once
 // #include <cooperative_groups.h>
+#if defined(__INTELLISENSE__) && !defined(__CUDACC__)
+#define __CUDACC__
+#endif
+
 #include <cuda.h>
+#include <cuda_fp16.h>
 #include <cuda_runtime.h>
+
+#if defined(__CUDACC__) && defined(BFLOAT16)
+#include <cuda_bf16.h>  // bfloat16 is float32 compatible with less mantissa bits
+#endif
 
 #include "common.h"
 #include "sort.cuh"
@@ -38,7 +47,19 @@ inline int get_cuda_threads(int n) {
 }
 
 template <typename T>
-__device__ __forceinline__ T clip(const T &x, const T &min_value = 0., const T &max_value = 1.) {
+__device__ __forceinline__ void _swap(T &a, T &b) {
+  T t = a;
+  a   = b;
+  b   = t;
+}
+
+template <typename T>
+__host__ __device__ T div_round_up(T val, T divisor) {
+  return (val + divisor - 1) / divisor;
+}
+
+template <typename T>
+__device__ __forceinline__ T clamp(const T &x, const T &min_value = 0., const T &max_value = 1.) {
   return min(max(x, min_value), max_value);
 }
 
