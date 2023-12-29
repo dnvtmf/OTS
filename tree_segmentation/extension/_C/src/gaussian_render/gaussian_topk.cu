@@ -104,8 +104,8 @@ std::tuple<Tensor, Tensor> gaussian_topk_weights(int topk, int W, int H, int P, 
   BinningState binningState = BinningState::fromChunk(binning_buffer, R);
   ImageState imgState       = ImageState::fromChunk(img_buffer, W * H);
 
-  Tensor top_indices = torch::full({W, H, topk}, -1, geomBuffer.options().dtype(torch::kInt32));
-  Tensor top_weights = torch::full({W, H, topk}, 0, geomBuffer.options().dtype(torch::kFloat32));
+  Tensor top_indices = torch::full({H, W, topk}, -1, geomBuffer.options().dtype(torch::kInt32));
+  Tensor top_weights = torch::full({H, W, topk}, 0, geomBuffer.options().dtype(torch::kFloat32));
   if (P == 0) return std::make_tuple(top_indices, top_weights);
 
   const dim3 tile_grid((W + BLOCK_X - 1) / BLOCK_X, (H + BLOCK_Y - 1) / BLOCK_Y, 1);

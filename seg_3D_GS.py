@@ -28,6 +28,7 @@ from tree_segmentation.extension.utils.gui.viewer_3D import Viewer3D
 from tree_segmentation.tree_2d_segmentation import Tree2D
 from tree_segmentation.tree_3d_segmentation import AutoEncoder
 from tree_segmentation.tree_structure import TreeStructure
+from tree_segmentation.loss import get_mask
 from tree_segmentation.gaussian_splatting import GaussianSplatting
 import tree_segmentation.extension.utils.io.colmap as colmap_util
 from evaluation.util import get_predictor, predictor_options
@@ -40,6 +41,7 @@ def load_model() -> GaussianSplatting:
     model_path = '/home/wan/Projects/NeRF/gaussian-splatting/output/7f156431-5/point_cloud/iteration_30000/point_cloud.ply'
     model = GaussianSplatting()
     model.load_ply(model_path)
+    model.active_sh_degree = model.max_sh_degree
     model.cuda()
     return model
 
@@ -241,14 +243,16 @@ class GSTreeSegmentation(TreeStructure):
     @torch.no_grad()
     def load_2d_results(self, save_dir: Path):
         tree_2d_png_files = sorted(list(save_dir.glob('*.png')))
-        # print(tree_2d_png_files)
-        tree_2d_results = [[] for _ in range(50)]
+        tree_2d_results = []
         for png_file in tree_2d_png_files:
             parts = png_file.stem.split('_')
             assert len(parts) == 4 and parts[2] == 'level'
             img_idx = int(parts[1])
             level = int(parts[3])
-            mask = utils.load_image(png_file)
+            # mask = utils.load_image(png_file)
+            mask = np.array(Image.open(png_file))
+            tree_2d_results.extend([[] for _ in range((img_idx + 1 - len(tree_2d_results)))])
+            assert len(tree_2d_results) > img_idx
             tree_2d_results[img_idx].append(mask)
             assert level == len(tree_2d_results[img_idx])
         return tree_2d_results
@@ -257,8 +261,9 @@ class GSTreeSegmentation(TreeStructure):
         if mask is not None:
             index = index.clone()
             weight = weight.clone()
-            index[~mask] = -1
-            weight[~mask] = 0
+            mask = torch.logical_not(mask).expand_as(weight)
+            index[mask] = -1
+            weight[mask] = 0
         mask = index > 0
         temp = torch.zeros(self.num_points, device=index.device)
         temp = torch.scatter_reduce(temp, 0, index[mask].long(), weight[mask], 'sum')
@@ -297,7 +302,6 @@ class GSTreeSegmentation(TreeStructure):
 
     def init_from_2D_reults(self, tree_seg_2d, indices: Tensor, weights: Tensor, weights_max: Tensor, pack=False):
         torch.cuda.empty_cache()
-        print(utils.get_GPU_memory())
         self._masks_2d_packed = pack
         masks_2d = []
         indices_2d = []
@@ -375,18 +379,19 @@ class GSTreeSegmentation(TreeStructure):
             self.range_2d = None
             self.range_level = None
         self.masks_2d = torch.stack(masks_2d, dim=0).to(self.device)
+        print(self.masks_2d.shape)
         self.indices_view = torch.tensor(indices_view, dtype=torch.int32, device=self.device)
         self.masks_view = self.masks_view[:self.V]
         # print(self.range_view, utils.show_shape(self.face_masks))
-        if pack:
-            indices = torch.nonzero(self.masks_2d)
-            self._masks_2d_sp = torch.sparse.FloatTensor(  # noqa
-                torch.stack([self.masks_2d[indices[:, 0], indices[:, 1]] - 1, indices[:, 1]]),
-                torch.ones(indices.shape[0], device=indices.device),
-                [self.M, self.num_points],
-            )
-        else:
-            self._masks_2d_sp = None
+        # if pack:
+        #     indices = torch.nonzero(self.masks_2d)
+        #     self._masks_2d_sp = torch.sparse.FloatTensor(  # noqa
+        #         torch.stack([self.masks_2d[indices[:, 0], indices[:, 1]] - 1, indices[:, 1]]),
+        #         torch.ones(indices.shape[0], device=indices.device),
+        #         [self.M, self.num_points],
+        #     )
+        # else:
+        #     self._masks_2d_sp = None
         self.face_mask = F.pad(self.masks_view.any(0), (1, 0))
 
         print(f'[Tree3D] view_masks: {utils.show_shape(self.masks_view)}')
@@ -466,6 +471,7 @@ class GSTreeSegmentation(TreeStructure):
                     A[si:ei, sj:ej] = iou
                     A[sj:ej, si:ei] = iou.T
         # self.A = A
+        torch.cuda.empty_cache()
         return A
 
     def build_all_graph(self, threshold=0.5, num_nearest=5):
@@ -506,6 +512,7 @@ class GSTreeSegmentation(TreeStructure):
     @torch.enable_grad()
     def compress_masks(self, hidden_dims=(256, 256, 256), epochs=3000, batch_size=64, lr=1e-3, include_views=True):
         autoencoder = AutoEncoder(self.num_points, hidden_dims).to(self.device)
+        print('AutoEncoder:', autoencoder)
         metric = DictMeter()
         opt = torch.optim.Adam(autoencoder.parameters(), lr=lr)
         lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, epochs, 1e-6)
@@ -585,14 +592,15 @@ class GSTreeSegmentation(TreeStructure):
         X = torch.cat(X, dim=0)
         print('[Tree3D] Features of face masks:', utils.show_shape(X))
         # self.X = X
+        torch.cuda.empty_cache()
         return X, autoencoder
 
     def _get_masks(self, P: Tensor, eps=1e-7):
         # P shape: [K, M]
         assert 0 <= self.indices_view.min() and self.indices_view.max() < self.V
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         weights = scatter(P, self.indices_view.long(), dim=1, dim_size=self.V, reduce='sum')
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
         weights = (weights @ self.masks_view.float()).clamp_min(eps)
         assert P.shape[1] == self.M
         if self._masks_2d_packed:
@@ -751,7 +759,8 @@ class GSTreeSegmentation(TreeStructure):
             topP = topP.softmax(dim=1)
             P = torch.scatter(torch.zeros_like(logits), 1, indices, topP).T
 
-        masks = self._get_masks(P)  # [K, F]
+        # masks = self._get_masks(P)  # [K, F]
+        masks = get_mask(P, self.masks_2d, self.indices_view, self.masks_view, self._masks_2d_packed, eps=1e-7)
         assert not torch.isnan(masks).any()
         scores = node_logits.float().sigmoid()  # the probability for where a node in the tree
         if timer is not None:
@@ -1007,68 +1016,6 @@ class GSTreeSegmentation(TreeStructure):
         return indices, new_indices
 
 
-@torch.no_grad()
-def get_tri_id(
-    model: GaussianSplatting,
-    image_size,
-    Tv2w,
-    fovx: float,
-    fovy: float,
-    topk=10,
-    images: Tensor = None,
-    Tv2c: Tensor = None
-):
-    image_size = image_size if images is None else (images.shape[2], images.shape[1])
-    aspect = image_size[0] / image_size[1]
-    if Tv2c is None:
-        Tv2c = ops_3d.perspective_v2(ops_3d.fovx_to_fovy(fovx, aspect), aspect, n=0.01).cuda()
-    else:
-        Tv2c = Tv2c.cuda()
-    print(utils.show_shape(images, Tv2w, fovx, Tv2c))
-    model.tanfovx = math.tan(0.5 * fovx)
-    model.tanfovy = math.tan(0.5 * fovy)
-    Tv2w = Tv2w.cuda()
-    Tw2v = torch.inverse(Tv2w)
-    avg_PSNR = 0
-    pc_indices, pc_weights = [], []
-    weights_max = []
-    num_points = model.points.shape[0]
-    rendered_images = []
-    print(utils.get_GPU_memory())
-    for i in range(len(Tv2w)):
-        outputs_i = model.render(info={
-            'size': image_size,
-            'Tw2v': Tw2v[i].transpose(-1, -2),
-            'Tw2c': ((Tv2c if Tv2c.ndim == 2 else Tv2c[i]) @ Tw2v[i]).transpose(-1, -2),
-            'campos': Tv2w[i, :3, 3]
-        })
-        image_i = outputs_i['images']
-        rendered_images.append(image_i.cpu())
-        if images is not None:
-            gt_image = torch.from_numpy(images[i]).cuda() / 255.
-            avg_PSNR += -10 * math.log10(F.mse_loss(image_i[0], gt_image[..., :3]).item())
-
-        indices_i, weights_i = topk_weights(topk, outputs_i['buffer'])
-        # print(indices_i.shape, weights_i.shape)
-        # print(weights_i[:, :, 0][indices_i[:, :, 0] > 0])
-        # print(weights_i[:, :, 0][indices_i[:, :, 0] > 0].aminmax())
-        # for i in range(weights_i.shape[-1] - 1):
-        #     assert torch.all(weights_i[:, :, i] >= weights_i[:, :, i + 1])
-        pc_weights.append(weights_i)
-        pc_indices.append(indices_i)
-        temp = torch.zeros(num_points, device=Tv2w.device)
-        temp.scatter_reduce_(0, indices_i.view(-1).long().clamp(0), weights_i.view(-1), 'sum')
-        weights_max.append(temp)
-        del outputs_i
-    weights_max = torch.amax(torch.stack(weights_max), dim=0)
-    if images is not None:
-        print('PSNR:', avg_PSNR / len(images))
-    pc_weights, pc_indices = torch.stack(pc_weights), torch.stack(pc_indices)
-    print(f'pixel corresponding points: indices {pc_indices.shape}, weights: {pc_weights.shape}')
-    rendered_images = torch.stack(rendered_images)
-    return pc_weights.cpu(), pc_indices.cpu(), weights_max.cpu(), rendered_images
-
-
 def load_DNeRF_cameras_and_images(root: Path, camera_file, img_dir):
     with root.joinpath(camera_file).open('r') as f:
         meta = json.load(f)
@@ -1220,13 +1167,14 @@ def loadCam(downscale, uid, cam_info, resolution_scale):
         resolution = round(orig_w / (resolution_scale * downscale)), round(orig_h / (resolution_scale * downscale))
     else:  # should be a type that converts to float
         if downscale == -1:
-            if orig_w > 1024:
+            max_size = 1024
+            if orig_w > max_size:
                 global WARNED
                 if not WARNED:
                     print("[ INFO ] Encountered quite large input images (>1.6K pixels width), rescaling to 1.6K.\n "
                           "If this is not desired, please explicitly specify '--resolution/-r' as 1")
                     WARNED = True
-                global_down = orig_w / 1024
+                global_down = orig_w / max_size
             else:
                 global_down = 1
         else:
@@ -1278,39 +1226,86 @@ def load_colmap_cameras(root: Path, colmap_dir='sparse/0', images_dir='images'):
 
     # nerf_normalization = getNerfppNorm(cam_infos)
     cameras = cameraList_from_camInfos(cam_infos, 1.0, -1)
-    fovx = cameras[0].FoVx
-    fovy = cameras[0].FoVy
-    image_size = (cameras[0].image_width, cameras[0].image_height)
-    # point_cloud = scene_info.point_cloud
-    Tw2v = torch.stack([camera.world_view_transform.transpose(-1, -2) for camera in cameras])
-    Tv2c = torch.stack([camera.projection_matrix.transpose(-1, -2) for camera in cameras])
-    return fovx, fovy, Tw2v, Tv2c, image_size
+    return cameras
+    # fovx = cameras[0].FoVx
+    # fovy = cameras[0].FoVy
+    # image_size = (cameras[0].image_width, cameras[0].image_height)
+    # # point_cloud = scene_info.point_cloud
+    # Tw2v = torch.stack([camera.world_view_transform.transpose(-1, -2) for camera in cameras])
+    # Tv2c = torch.stack([camera.projection_matrix.transpose(-1, -2) for camera in cameras])
+    # return fovx, fovy, Tw2v, Tv2c, image_size
+
+
+@torch.no_grad()
+def get_tri_id(
+    model: GaussianSplatting,
+    cameras: List[Camera_2],
+    topk=10,
+    images: Tensor = None,
+):
+    model.tanfovx = math.tan(0.5 * cameras[0].FoVx)
+    model.tanfovy = math.tan(0.5 * cameras[0].FoVy)
+    avg_PSNR = 0
+    pc_indices, pc_weights = [], []
+    weights_max = []
+    num_points = model.points.shape[0]
+    rendered_images = []
+    print(utils.get_GPU_memory())
+    for i in tqdm(range(len(cameras)), desc='render images'):
+        outputs_i = model.render(info={
+            'size': (cameras[i].image_width, cameras[i].image_height),
+            'Tw2v': cameras[i].world_view_transform.transpose(-1, -2).cuda(),
+            'Tw2c': cameras[i].full_proj_transform.transpose(-1, -2).cuda(),
+            'campos': cameras[i].camera_center.cuda(),
+        },
+            background=torch.ones(3).cuda()
+        )
+        image_i = outputs_i['images'][0].clamp(0, 1)
+        # plt.imshow(utils.as_np_image(image_i))
+        # plt.show()
+        # exit()
+        rendered_images.append(image_i.cpu())
+        if images is not None:
+            gt_image = torch.from_numpy(images[i]).cuda() / 255.
+            avg_PSNR += -10 * math.log10(F.mse_loss(image_i, gt_image[..., :3]).item())
+
+        indices_i, weights_i = topk_weights(topk, outputs_i['buffer'])
+        # print(indices_i.shape, weights_i.shape)
+        # print(weights_i[:, :, 0][indices_i[:, :, 0] > 0])
+        # print(weights_i[:, :, 0][indices_i[:, :, 0] > 0].aminmax())
+        # for i in range(weights_i.shape[-1] - 1):
+        #     assert torch.all(weights_i[:, :, i] >= weights_i[:, :, i + 1])
+        pc_weights.append(weights_i.cpu())
+        pc_indices.append(indices_i.cpu())
+        temp = torch.zeros(num_points, device=torch.device('cuda'))
+        temp.scatter_reduce_(0, indices_i.view(-1).long().clamp(0), weights_i.view(-1), 'sum')
+        weights_max.append(temp.cpu())
+        if i == 0:
+            print(utils.show_shape(outputs_i, indices_i, weights_i))
+        del outputs_i, image_i
+    weights_max = torch.amax(torch.stack(weights_max), dim=0)
+    if images is not None:
+        print('PSNR:', avg_PSNR / len(images))
+    pc_weights, pc_indices = torch.stack(pc_weights), torch.stack(pc_indices)
+    pc_weights = pc_weights.permute(0, 3, 1, 2)
+    pc_indices = pc_indices.permute(0, 3, 1, 2)
+    print(f'pixel corresponding points: indices {pc_indices.shape}, weights: {pc_weights.shape}')
+    rendered_images = torch.stack(rendered_images)
+    return pc_weights.cpu(), pc_indices.cpu(), weights_max.cpu(), rendered_images
 
 
 def run_2d_tree_segmentation(args, images: Tensor, save_dir: Path):
-    predictor = get_predictor(args)
     # features = []
     results = []
     images = (images[:, :, :, :3] * 255).to(torch.uint8).cpu().numpy()
+    print(images.shape)
     N, H, W, _ = images.shape
     # first stage
     for i in tqdm(range(N), desc='2d tree seg'):
+        if save_dir.joinpath(f'img_{i:03d}.jpg').exists():
+            continue
+        predictor = get_predictor(args)
         predictor.set_image(images[i])
-        # features.append(utils.tensor_to(predictor.features, device=torch.device('cpu')))
-        # tree2d = Tree2D(
-        #     # device=device,
-        #     min_area=predictor.generate_cfg.min_area,
-        #     in_threshold=predictor.generate_cfg.in_threshold,
-        #     in_thres_area=predictor.generate_cfg.in_area_threshold,
-        #     union_threshold=predictor.generate_cfg.union_threshold,
-        # )
-        # points = tree2d.sample_grid(predictor.generate_cfg.points_per_side)
-        # output = predictor.process_points(points)
-        # num_ignored = tree2d.insert_batch(output)
-        # tree2d.remove_not_in_tree()
-        # # tree2d.remove_background(tri_ids[i].eq(0))
-        # tree2d.compress()
-        # predictor.reset_image()
         results = predictor.tree_generate(
             image=images[i],
             points_per_side=args.points_per_side,
@@ -1335,8 +1330,8 @@ def run_2d_tree_segmentation(args, images: Tensor, save_dir: Path):
             colors = np.array([[1, 1, 1]] + sns.color_palette(n_colors=len(level_k)))
             mask_i = Image.fromarray(mask, mode='P')
             mask_i.putpalette((colors * 255).astype(np.uint8))
-            mask_i.save(save_dir.joinpath(f'img_{i}_level_{k}.png'))
-        # results.append(tree2d)
+            mask_i.save(save_dir.joinpath(f'img_{i:03d}_level_{k:02d}.png'))
+        utils.save_image(save_dir / f'img_{i:03d}.jpg', images[i])
     return
 
 
@@ -1379,33 +1374,32 @@ def main():
     else:
         # images, Tv2w, times, fovx = load_DNeRF_cameras_and_images(
         #     Path('~/data/NeRF/D_NeRF/lego').expanduser(), 'transforms_train.json', '')
-        fovx, fovy, Tw2v, Tv2c, image_size = load_colmap_cameras(Path('~/data/Mip360/bicycle').expanduser())
-        print(fovy, ops_3d.fovx_to_fovy(fovx, image_size[0] / image_size[1]))
-        Tv2w = torch.inverse(Tw2v)
-        images = None
-        torch.cuda.empty_cache()
-        print('load_cameras_and_images', utils.get_GPU_memory())
+        # fovx, fovy, Tw2v, Tv2c, image_size = load_colmap_cameras(Path('~/data/NeRF/Mip360/bicycle').expanduser())
+        cameras = load_colmap_cameras(Path('~/data/NeRF/Mip360/bicycle').expanduser())
         # pc_weights, pc_indices, w_max = get_tri_id(model, images, Tv2w, fovx, topk=10)
-        pc_weights, pc_indices, w_max, images = get_tri_id(model,
-            image_size=image_size,
-            Tv2w=Tv2w,
-            fovx=fovx,
-            fovy=fovy,
-            Tv2c=Tv2c,
-            topk=10
-        )
-        print('get_tri_id', utils.get_GPU_memory())
-        if len(list(save_path.glob('*.png'))) == 0:
-            run_2d_tree_segmentation(args, images, save_dir)
+        pc_weights, pc_indices, w_max, images = get_tri_id(model, cameras, topk=10)
+        print('get_tri_id, GPU: {:.3f}/{:.3f}'.format(*utils.get_GPU_memory()))
+        # if len(list(save_dir.glob('*.png'))) == 0:
+        run_2d_tree_segmentation(args, images, save_dir)
         tree_2d_results = tree_seg_pc.load_2d_results(save_dir)
-        exit()
-        print('load_2d_results')
-        tree_seg_pc.init_from_2D_reults(tree_2d_results, pc_indices, pc_weights, w_max)
-        print('init_from_2D_reults')
-        A = tree_seg_pc.build_all_graph()
-        print('build_all_graph')
-        X, _ = tree_seg_pc.compress_masks()
-        print('compress_masks')
+        del model
+        torch.cuda.empty_cache()
+        # exit()
+        print('load_2d_results, GPU: {:.3f}/{:.3f}'.format(*utils.get_GPU_memory()))
+        tree_seg_pc.init_from_2D_reults(tree_2d_results[::2], pc_indices[::2], pc_weights[::2], w_max[::2], pack=True)
+        print('init_from_2D_reults, GPU: {:.3f}/{:.3f}'.format(*utils.get_GPU_memory()))
+        if save_dir.joinpath('A.pth').exists():
+            A = torch.load(save_path.joinpath('A.pth'), map_location='cpu').cuda()
+        else:
+            A = tree_seg_pc.build_all_graph()
+            torch.save(A, save_dir.joinpath('A'))
+        print('build_all_graph, GPU: {:.3f}/{:.3f}'.format(*utils.get_GPU_memory()))
+        if save_dir.joinpath('X.pth').exists():
+            X = torch.load(save_path.joinpath('X.pth'), map_location='cpu').cuda()
+        else:
+            X, _ = tree_seg_pc.compress_masks(hidden_dims=(32, 128, 256))
+            torch.save(X, save_dir.joinpath('X'))
+        print('compress_masks, GPU: {:.3f}/{:.3f}'.format(*utils.get_GPU_memory()))
         K = 2 * tree_seg_pc.Lmax
         gnn = pyg_nn.GCN(
             in_channels=X.shape[1],

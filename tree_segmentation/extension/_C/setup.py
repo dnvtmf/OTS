@@ -22,7 +22,7 @@ setup(
     ext_modules=[
         CUDAExtension(
             name='C_ext',
-            sources=list(get_cpp_or_cuda_sources('src')),
+            sources=list(get_cpp_or_cuda_sources('src')) + list(get_cpp_or_cuda_sources('src/gaussian_render')),
             extra_compile_args={
                 'cxx': ["-fopenmp", "-O3"],
                 'nvcc': [
