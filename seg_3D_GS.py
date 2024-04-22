@@ -760,7 +760,7 @@ class GSTreeSegmentation(TreeStructure):
             P = torch.scatter(torch.zeros_like(logits), 1, indices, topP).T
 
         # masks = self._get_masks(P)  # [K, F]
-        masks = get_mask(P, self.masks_2d, self.indices_view, self.masks_view, self._masks_2d_packed, eps=1e-7)
+        masks = get_mask(P, self.masks_2d, self.indices_view, self.masks_view, self._masks_2d_packed, 1e-7)
         assert not torch.isnan(masks).any()
         scores = node_logits.float().sigmoid()  # the probability for where a node in the tree
         if timer is not None:
@@ -1389,16 +1389,16 @@ def main():
         tree_seg_pc.init_from_2D_reults(tree_2d_results[::2], pc_indices[::2], pc_weights[::2], w_max[::2], pack=True)
         print('init_from_2D_reults, GPU: {:.3f}/{:.3f}'.format(*utils.get_GPU_memory()))
         if save_dir.joinpath('A.pth').exists():
-            A = torch.load(save_path.joinpath('A.pth'), map_location='cpu').cuda()
+            A = torch.load(save_dir.joinpath('A.pth'), map_location='cpu').cuda()
         else:
             A = tree_seg_pc.build_all_graph()
-            torch.save(A, save_dir.joinpath('A'))
+            torch.save(A, save_dir.joinpath('A.pth'))
         print('build_all_graph, GPU: {:.3f}/{:.3f}'.format(*utils.get_GPU_memory()))
         if save_dir.joinpath('X.pth').exists():
-            X = torch.load(save_path.joinpath('X.pth'), map_location='cpu').cuda()
+            X = torch.load(save_dir.joinpath('X.pth'), map_location='cpu').cuda()
         else:
             X, _ = tree_seg_pc.compress_masks(hidden_dims=(32, 128, 256))
-            torch.save(X, save_dir.joinpath('X'))
+            torch.save(X, save_dir.joinpath('X.pth'))
         print('compress_masks, GPU: {:.3f}/{:.3f}'.format(*utils.get_GPU_memory()))
         K = 2 * tree_seg_pc.Lmax
         gnn = pyg_nn.GCN(

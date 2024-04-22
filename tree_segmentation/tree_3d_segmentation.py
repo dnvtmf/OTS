@@ -1,5 +1,3 @@
-import math
-import os
 import random
 from pathlib import Path
 from typing import List, Tuple, Optional, Sequence, Dict
@@ -11,539 +9,15 @@ import torch.nn.functional as F
 from torchvision.ops.boxes import batched_nms, box_area  # type: ignore
 from torch_scatter import scatter
 import torch_geometric.nn as pyg_nn
-
 from scipy.optimize import linear_sum_assignment
+
 from tree_segmentation.extension import Mesh, utils
-from tree_segmentation.extension import ops_3d
 from tree_segmentation.tree_structure import TreeStructure
-from tree_segmentation import MaskData, Tree2D, extension as ext
-
-
-class Tree3D(TreeStructure):
-
-    def __init__(
-        self,
-        mesh: Mesh,
-        device=None,
-        in_threshold=0.9,
-        in_thre_area=10,
-        union_threshold=0.1,
-        ignore_area=50,
-        verbose=1,
-        momentum=0.9,
-    ):
-        self.device = device
-        # mesh
-        self.mesh = mesh
-        v3 = mesh.v_pos[mesh.f_pos]  # shape: (F, 3, 3)
-        self.area = torch.cross(v3[:, 0] - v3[:, 1], v3[:, 0] - v3[:, 2], dim=-1).norm(dim=-1) * 0.5
-        assert torch.all(self.area.ge(0))
-        self.num_faces = mesh.f_pos.shape[0]
-        # tree structure
-        self.face_parent = torch.empty(self.num_faces + 1, device=device, dtype=torch.int)
-        self.score = torch.empty((1, self.num_faces + 1), device=device, dtype=torch.float)
-        self.score_node = torch.empty((1, 2), device=device, dtype=torch.int)
-        super().__init__(1, device=device, verbose=verbose)
-        # merge parameters
-        self.threshold_in = in_threshold
-        self.threshold_in_area = in_thre_area
-        self.threshold_union = union_threshold
-        self.threshold_score = 0.5
-        self.threshold_score_node = 0.5
-        self.momentum = momentum
-        self.ignore_area = ignore_area
-        self.pad_length = 10  # add 10 empty nodes when enlarge nodes
-        self.conflict_nodes = [[]]
-
-    def reset(self):
-        self.face_parent.fill_(-1)
-        self.score.fill_(-1)
-        self.score_node.fill_(5.)
-        self.conflict_nodes = [[]]
-        super().reset()
-
-    def resize(self, N: int):
-        N, M = super().resize(N)
-        if M > N:
-            self.score = self.score[:N]
-            self.score_node = self.score_node[:N]
-        elif M < N:
-            self.score = torch.constant_pad_nd(self.score, (0, 0, 0, N - M), -1)
-            self.score_node = torch.constant_pad_nd(self.score_node, (0, 0, 0, N - M), 5.)
-            # print(utils.show_shape(self.score, self.node_score))
-
-    def node_new(self):
-        if self.cnt + 1 == len(self.parent):
-            self.resize(self.cnt + 1 + self.pad_length)
-        index = super().node_new()
-        self.score[index].fill_(-1)
-        self.score_node[index].fill_(5)
-        return index
-
-    # def node_delete(self, idx: int, move_children=False):
-    #     # TODO: move face_parent
-    #     return super().node_delete(idx, move_children)
-
-    def node_rearrange(self, indices=None):
-        if indices is None:
-            conflict_nodes = [torch.tensor(x, dtype=torch.int, device=self.device) for x in self.conflict_nodes]
-            indices = torch.cat(self.get_levels() + conflict_nodes, dim=0)
-        indices, new_indices = super().node_rearrange(indices)
-        num = len(indices)
-        self.face_parent = new_indices[self.face_parent + 1]
-        self.score[:num] = self.score[indices]
-        self.score_node[:num] = self.score_node[indices]
-        self.conflict_nodes = [[new_indices[i + 1].item() for i in L] for L in self.conflict_nodes]
-        return indices, new_indices
-
-    def proposal_camera_pose(self, radius_range=(2.5, 3.), elev_range=(0, 180), azim_range=(0, 360), device=None):
-        """根据现状提议相机位姿"""
-        if device is None:
-            device = self.device
-        radius = torch.rand(1, device=device) * (radius_range[1] - radius_range[0]) + radius_range[0]
-        thetas = torch.rand(1, device=device) * (elev_range[1] - elev_range[0]) + elev_range[0]
-        phis = torch.rand(1, device=device) * (azim_range[1] - azim_range[0]) + azim_range[0]
-
-        eye = ops_3d.coord_spherical_to(radius, thetas.deg2rad(), phis.deg2rad()).to(device)
-        return ops_3d.look_at(eye, torch.zeros_like(eye))
-
-    def proposal_camera_pose_uniform(self, num=1, radius_range=(2.5, 3.), elev_range=(0, 180), azim_range=(0, 360)):
-        cos_theta_range = (math.cos(math.radians(elev_range[0])), math.cos(math.radians(elev_range[1])))
-        phi_range = (math.radians(azim_range[0]), math.radians(azim_range[1]))
-        phis = torch.rand((num,)) * (phi_range[1] - phi_range[0]) + phi_range[0]
-        thetas = torch.arccos(torch.rand((num,)) * (cos_theta_range[1] - cos_theta_range[0]) + cos_theta_range[0])
-        radius = torch.rand((num,)) * (radius_range[1] - radius_range[0]) + radius_range[0]
-
-        eye = ops_3d.coord_spherical_to(radius, thetas, phis).to(self.device)
-        return ops_3d.look_at(eye, torch.zeros_like(eye))
-
-    def proposal_camera_pose_spherical_grid(self, num=1, radius_range=(2.5, 2.5), device=None):
-        """球面上的均匀格点"""
-        seq = torch.arange(num, device=device)
-        c = (math.sqrt(5) - 1) * math.pi
-        z = ((seq * 2 - 1) / num - 1).clamp(-1, 1)
-        x = torch.sqrt(1 - z * z) * (seq * c).cos()
-        y = torch.sqrt(1 - z * z) * (seq * c).sin()
-        eye = torch.stack([x, y, z], dim=-1)
-        eye = eye * (torch.rand((num, 1), device=device) * (radius_range[1] - radius_range[0]) + radius_range[0])
-        return ops_3d.look_at(eye, torch.zeros_like(eye))
-
-    def proposal_camera_pose_cycle(
-        self,
-        num=1,
-        radius_range=(2.5, 3.),
-        elev_range=(0, 180),
-        azim_range=(0, 360),
-        device=None
-    ):
-        theta_range = (math.radians(elev_range[0]), math.radians(elev_range[1]))
-        phi_range = (math.radians(azim_range[0]), math.radians(azim_range[1]))
-        # phase 1
-        num1 = int(0.5 * num)
-        thetas_1 = (torch.arange(num1) + 0.5) / num1 * (theta_range[1] - theta_range[0]) + theta_range[0]
-        phis_1 = torch.ones((num1,)) * (phi_range[1] + phi_range[0]) * 0.5
-        # phase 2
-        num2 = num - num1
-        thetas_2 = torch.ones((num2,)) * (theta_range[1] + theta_range[0]) * 0.5
-        phis_2 = (torch.arange(num2) + 0.5) / num2 * (phi_range[1] - phi_range[0]) + phi_range[0]
-
-        thetas = torch.cat([thetas_1, thetas_2])
-        phis = torch.cat([phis_1, phis_2])
-        radius = torch.rand((num,)) * (radius_range[1] - radius_range[0]) + radius_range[0]
-        eye = ops_3d.coord_spherical_to(radius, thetas, phis).to(device)
-        return ops_3d.look_at(eye, torch.zeros_like(eye))
-
-    def proposal_points(self, tri_id: Tensor, num_points=256):
-        """在当前相机位姿下提议SAM的promt points
-        Args:
-            tri_id: shape: [H, W], offset by one, 0 --> none mesh
-            num_points:
-        """
-        # find un-segment triangles-
-        # parent_faces = self.parent[tri_id]
-        # print(parent_faces.shape)
-        # undeal_index = torch.nonzero(parent_faces == 0 & tri_id > 0)
-        unique_tri_ids = torch.unique(tri_id, sorted=True)
-        if unique_tri_ids[0] == 0:
-            unique_tri_ids = unique_tri_ids[1:]
-        parent_faces = self.parent[unique_tri_ids]
-        num_unsegment = parent_faces.shape[0] - (parent_faces >= 0).sum().item()
-        if num_unsegment > 0:
-            sample_face_indices = unique_tri_ids[parent_faces < 0]
-            return self.sample_points_by_area(sample_face_indices, num_points)
-        # next level sample
-        raise NotImplementedError()
-
-    def sample_points_by_area(self, sample_face_indices: Tensor, num_points: int):
-        # print('sample_faces', sample_face_indices.shape)
-        assert 1 <= sample_face_indices.min() and sample_face_indices.max() <= self.num_faces
-        # print('sample_weighs:', *sample_face_indices.aminmax(), self.area.shape)
-        sample_weights = self.area[sample_face_indices - 1]
-        sample_weights = sample_weights / sample_weights.sum()
-        # print('sample_weights', sample_weights.shape, sample_weights.sum())
-        sample_rand = torch.rand(num_points, device=sample_face_indices.device)
-        sample_idx = torch.searchsorted(sample_weights.cumsum(dim=0), sample_rand)
-
-        bc = torch.rand((num_points, 3), device=sample_face_indices.device)  # 重心坐标
-        bc = bc / bc.sum(dim=-1, keepdim=True)
-        verts = self.mesh.v_pos[self.mesh.f_pos[sample_face_indices[sample_idx]]]
-        sample_points = torch.sum(verts * bc[:, :, None], dim=1)
-        return sample_points
-
-    def get_aux_data(self, tri_id: Tensor):
-        indices = self.face_parent[tri_id]
-        aux_data = {}
-        for nodes in reversed(self.get_levels()):
-            for x in nodes:
-                mask = indices.eq(x)
-                area = mask.sum().item()
-                if area >= self.ignore_area:
-                    aux_data[x.item()] = (mask, area)
-                indices[mask] = self.parent[x].item()
-        mask = tri_id > 0
-        aux_data[0] = (mask, mask.sum().item())
-        aux_data['tri_id'] = tri_id
-        # print('[Tree3D] get_aux_data:', utils.show_shape(aux_data))
-        # print(f'There are {len(aux_data) - 1} segmented masks')
-        return aux_data
-
-    def get_level(self, aux_data: dict = None, root=0, depth=1, include_faces=False):
-        results = self.get_levels(aux_data, root, depth, include_faces)
-        return results[depth] if len(results) > depth else torch.tensor([])
-
-    def get_levels(self, aux_data: dict = None, root=0, depth=-1, include_faces=False):
-        levels = super().get_levels(root=root, depth=depth)
-        # print(f'[Tree3D] levels without auxdata:', levels)
-        if aux_data is not None:
-            levels = [level.new_tensor([x for x in level if x.item() in aux_data]) for level in levels]
-        if include_faces:
-            faces = torch.unique(aux_data['tri_id'])
-            parents = self.face_parent[faces]
-            levels.append(torch.tensor([], dtype=torch.int, device=self.device))
-            for i, level in reversed(list(enumerate(levels))):
-                levels[i + 1] = torch.cat([levels[i + 1]] + [faces[parents == x] for x in level])
-        levels = [level for level in levels if level.numel() > 0]
-        # if self.verbose > 1 or (self.verbose == 1 and depth < 0):
-        #     print(f'[Tree3D] get {len(levels)} levels')
-        return levels
-
-    def update(self, mask_data: MaskData, aux_data: dict, one_batch=True):
-        for i in range(len(mask_data['masks'])):
-            if self.verbose > 0:
-                print('[Tree3D]', '=' * 10, f'mask [{i + 1}]', '=' * 10)
-            self.update_one_mask(aux_data, mask_data['masks'][i].to(self.device))
-            # print('[Tree3D] after update:', utils.show_shape(aux_data))
-            # print('[Tree3D] levels:', self.get_levels(aux_data))
-        # self.print_tree()
-        if one_batch:
-            for nodes in self.get_levels(aux_data):
-                for now in nodes:
-                    self.score_node[now, 0] += 1
-            self.update_tree()
-        print('num_nodes:', sum(len(x) for x in self.get_levels()), 'num conflict:',
-            sum(len(x) for x in self.conflict_nodes), self.cnt)
-        # self.node_rearrange()
-        # self.print_tree()
-
-    def update_one_mask(
-        self,
-        aux_data: dict,
-        mask: Tensor,
-        area=None,
-        root=0,
-        mask_new: Tensor = None,
-        area_new=0,
-        level=0,
-    ):
-        if root == 0:
-            area = mask.sum().item()
-            # mask = self.preprocess_mask(mask, aux_data)
-            # mask_area = mask.sum().item()
-            if area <= self.ignore_area:
-                if self.verbose > 0:
-                    print(f"[Tree3D] mask area is too small: {area} < {self.ignore_area}, skip")
-                return False
-            mask_j, area_j = aux_data[root]
-            mask = torch.logical_and(mask, mask_j)
-            inter = mask.sum().item()
-            # union = area_j + mask_area - inter
-            if inter / area_j >= self.threshold_in or area_j - inter <= self.threshold_in_area:  # foreground
-                if self.verbose > 0:
-                    print(f'[Tree3D] whole scene, skip')
-                return False
-            if 1 - inter / area >= self.threshold_in or inter <= self.threshold_in_area:  # background
-                if self.verbose > 0:
-                    print(f"[Tree3D] background, skip")
-                return False
-            area = inter
-            mask_new = (self.face_parent[aux_data['tri_id']] == -1) & mask
-            area_new = mask_new.sum().item()
-            if area_new / area >= self.threshold_in:
-                now = self.node_new()
-                if self.verbose > 0:
-                    print(f'[Tree3D] new area: {now}')
-                self.node_insert(now, root)
-                aux_data[now] = (mask, area)
-                self._update_score(aux_data, mask, now)
-                self._update_face_parent(aux_data, mask, now, mask_new, area_new)
-                return True
-
-        nodes_in_i = []
-        nodes_union = []
-        for j in self.get_children(root):
-            if j not in aux_data:
-                continue
-            mask_j, area_j = aux_data[j]
-            inter = torch.logical_and(mask, mask_j).sum().item() + area_new  # consider new mask as a part of mask_j
-            area_j += area_new
-            union = area_j + area - inter
-            if inter / area >= self.threshold_in or area - inter <= self.threshold_in_area:  # i in j
-                if inter / area_j >= self.threshold_in or area_j - inter <= self.threshold_in_area:  # j == i
-                    if self.verbose > 0:
-                        print(f'[Tree3D] mask equal to {j}')
-                    self._update_score(aux_data, mask, j)
-                    self._update_face_parent(aux_data, mask, j, mask_new, area_new)
-                    return True
-                else:
-                    if self.verbose > 0:
-                        print(f"[Tree3D] mask belong to {j}")
-                    return self.update_one_mask(aux_data, mask, area, j, mask_new, area_new, level=level + 1)
-            elif inter / area_j >= self.threshold_in:  # j in i
-                nodes_in_i.append(j)
-            elif inter / union >= self.threshold_union:
-                nodes_union.append((j, f"{inter / union:.2%}"))
-            else:  # no intersect
-                pass
-        if len(nodes_union) > 0:
-            if self.verbose > 0:
-                print(f"[Tree3D] union with {nodes_union}")
-            is_same = False
-            while level >= len(self.conflict_nodes):
-                self.conflict_nodes.append([])
-            for j in self.conflict_nodes[level]:
-                mask_j = (self.score[j] > self.threshold_score)[aux_data['tri_id']]
-                area_j = mask_j.sum().item() + area_new
-                inter = torch.logical_and(mask, mask_j).sum().item() + area_new
-                if inter / area >= self.threshold_in or area - inter <= self.threshold_in_area:
-                    if inter / area_j >= self.threshold_in or area_j - inter <= self.threshold_in_area:
-                        is_same = True
-                        self._update_score(aux_data, mask, j)
-                        break
-            if not is_same:
-                now = self.node_new()
-                self._update_score(aux_data, mask, now)
-                self.conflict_nodes[level].append(now)
-            return False
-        now = self.node_new()
-        self.node_insert(now, root)
-        self._update_score(aux_data, mask, now)
-        self._update_face_parent(aux_data, mask, now, mask_new, area_new)
-        aux_data[now] = (mask, area)
-        if self.verbose > 0:
-            print(f"[Tree3D] insert mask {now} as child of {root}")
-        for j in nodes_in_i:
-            self.node_move(j, now)
-            if self.verbose > 0 and (self.verbose > 1 or j > self.num_faces):
-                print(f'[Tree3D] move {j} as child of mask {now}')
-        return True
-
-    def _update_score(self, aux_data, mask: Tensor, index: int):
-        if 'tri_unique' not in aux_data:
-            aux_data['tri_unique'] = aux_data['tri_id'].unique(return_counts=True)
-        tf, tc = aux_data['tri_unique']
-        faces, counts = aux_data['tri_id'][mask].unique(return_counts=True)
-        tmp = torch.zeros_like(self.score[index])
-        tmp[faces] = counts.float()
-        tmp = tmp[tf] / tc.float()
-        now = self.score[index, tf]
-        self.score[index][tf] = torch.where(now < 0, tmp, torch.lerp(tmp, now, self.momentum))
-        self.score[index, 0] = 0
-        self.score_node[index, 1] += 1
-        return
-
-    def _update_face_parent(self, aux_data, mask: Tensor, index: int, new_mask: Tensor, new_area, threshold=0.5):
-        parent = self.parent[index].item()
-        faces = torch.unique(aux_data['tri_id'][mask])
-        if faces[0] == 0:
-            faces = faces[1:]
-        face_parent = self.face_parent[faces]
-        need_update = (face_parent == parent) | (face_parent == -1)
-        if need_update.numel() > 0:
-            update_face = faces[need_update]
-            self.face_parent[update_face] = index
-        if new_area > 0:
-            while parent != 0:
-                root_mask = aux_data[parent][0] | new_mask
-                aux_data[parent] = (root_mask, root_mask.sum().item())
-                parent = self.parent[parent].item()
-
-    def update_tree(self, threshold_node_delete=0.1):
-        self.node_rearrange()
-        node_score = self.score_node[:1 + self.cnt, 1] / self.score_node[:self.cnt + 1, 0]
-        node_score[0] = 1e9
-
-        self.parent.fill_(-1)
-        self.first.fill_(-1)
-        self.last.fill_(-1)
-        self.next.fill_(-1)
-        self.face_parent.fill_(-1)
-        self.conflict_nodes = []
-        aux_data = {}
-
-        for i in torch.argsort(node_score, descending=True):
-            i = i.item()
-            if i == 0:
-                continue
-            if node_score[i] < threshold_node_delete:
-                if self.verbose > 0:
-                    print(f'[Tree3D] Delete node {i}, node score {node_score[i]} < threshold {threshold_node_delete}')
-                continue
-            mask = self.score[i] >= self.threshold_score
-            if not torch.any(mask):
-                print(f'[Tree3D] deldete node {i}, empty faces')
-                continue
-            area = (mask[1:] * self.area).sum().item()
-            self._update_one_instance(i, mask, area, aux_data)
-        self.node_rearrange()
-
-    def _update_one_instance(self, now: int, mask: Tensor, area: float, aux_data: dict, root=0, level=0):
-        nodes_in = []
-        nodes_union = []
-        for j in self.get_children(root):
-            mask_j, area_j = aux_data[j]
-            inter = ((mask & mask_j)[1:] * self.area).sum().item()
-            if inter / area >= self.threshold_in:
-                if inter / area_j >= self.threshold_in:
-                    self.score_node[j, 0] += self.score_node[now, 0]
-                    self.score[j] = 0.5 * (self.score[j] + self.score[now])
-                    mask = self.score[j] >= self.threshold_score
-                    area = (mask[1:] * self.area).sum().item()
-                    aux_data[j] = (mask, area)
-                    print(f'[Tree3D] same instance {now}, {j}')
-                else:
-                    self._update_one_instance(now, mask, area, aux_data, j, level + 1)
-                return
-            elif inter / area_j >= self.threshold_in:
-                nodes_in.append(j)
-            elif inter / (area + area_j - inter) >= self.threshold_union:
-                nodes_union.append(j)
-        if len(nodes_union) > 0:
-            while len(self.conflict_nodes) <= level:
-                self.conflict_nodes.append([])
-            has_same = False
-            for j in self.conflict_nodes[level]:
-                mask_j, area_j = aux_data[j]
-                inter = ((mask & mask_j)[1:] * self.area).abs().sum().item()
-                if inter / area >= self.threshold_in and inter / area_j >= self.threshold_in:
-                    self.score_node[j, 0] += self.score_node[now, 0]
-                    self.score[j] = 0.5 * (self.score[j] + self.score[now])
-                    mask = self.score[j] >= self.threshold_score
-                    area = (mask[1:] * self.area).sum().item()
-                    aux_data[j] = (mask, area)
-                    print(f'[Tree3D] same confict instance {now} {j}')
-                    has_same = True
-                    break
-            if not has_same:
-                self.conflict_nodes[level].append(now)
-                aux_data[now] = (mask, area)
-            return
-        self.node_insert(now, root)
-        aux_data[now] = (mask, area)
-        self.face_parent[mask & ((self.face_parent < 0) | (self.face_parent == root))] = now
-        for j in nodes_in:
-            self.node_move(j, now)
-
-    def preprocess_mask(self, mask: Tensor, aux_data: dict, threshold=0.5):
-        """预处理mask: 选择占比大于threshold的所有面片"""
-        if 'num_faces' not in aux_data:
-            faces, counts = torch.unique(aux_data['tri_id'], return_counts=True)
-            aux_data['num_faces'] = {k.item(): v.item() for k, v in zip(faces, counts)}
-        faces_on_mask = aux_data['tri_id'][mask]
-        num_faces = aux_data['num_faces']
-        faces, counts = torch.unique(faces_on_mask, return_counts=True)
-        mask_ = torch.zeros_like(mask)
-        for fi, area in zip(faces, counts):
-            fi, area = fi.item(), area.item()
-            if fi == 0:
-                continue
-            area_all = num_faces[fi]
-            if area / area_all >= threshold:
-                mask_ |= aux_data['tri_id'] == fi  # extend mask to all pixels of triangle fi
-            else:
-                pass
-                # mask = mask & (aux_data['tri_id'] != fi)
-                # print(f'face {fi.item()} is filtered, {area/area_all:.2%}')
-        return mask_
-
-    def verify_masks(self, mask_data: MaskData, aux_data: dict):
-        for i in range(len(mask_data['masks'])):
-            mask = mask_data['masks']
-            self.verify_one_mask(mask, aux_data, 0)
-
-    def verify_one_mask(self, mask: Tensor, aux_data: dict, root=0):
-        pass
-
-    def compress(self):
-        if self.verbose > 0:
-            print('[Tree3D] compress')
-        levels = self.get_levels()
-        face_parent = self.face_parent.clone()
-        for level, nodes in reversed(list(enumerate(levels))):
-            # print(level, nodes)
-            if level == 0 or level == 1:
-                continue
-            for i in nodes:
-                faces_i = face_parent == i
-                pa = self.parent[i]
-                face_parent[faces_i] = pa
-                if self.last[i] < 0 and self.next[i] < 0:  # only one child
-                    faces_p = face_parent == pa
-                    inter = self.area[(faces_i & faces_p)[1:]].sum().item()
-                    union = self.area[(faces_i | faces_p)[1:]].sum().item()
-                    if inter / union >= self.threshold_in:
-                        self.node_delete(i, move_children=True)
-                        if self.verbose > 0:
-                            print(f'[Tree3D]: compress {i} and {pa}: {inter / union:.2%}')
-
-        self.node_rearrange()
-
-    def save(self, filename):
-        torch.save(
-            {
-                'parent': self.parent,
-                'first': self.first,
-                'next': self.next,
-                'last': self.last,
-                'cnt': self.cnt,
-                'face_parent': self.face_parent,
-            }, filename)
-        if self.verbose > 0:
-            print(f"[Tree3D]save now Tree3D to {filename}")
-
-    def load(self, filename):
-        if not os.path.exists(filename):
-            if self.verbose > 0:
-                print(f'[Tree3D] No such file: {filename} to load Tree3D')
-            return
-        data = torch.load(filename, map_location=self.device)
-        self.parent = data['parent']
-        self.first = data['first']
-        self.next = data['next']
-        self.last = data['last']
-        self.cnt = data['cnt']
-        self.face_parent = data['face_parent']
-        if self.verbose > 0:
-            print('[Tree3D] load now Tree3D from:', filename)
-
-    def to(self, device):
-        super().to(device)
-        self.face_parent = self.face_parent.to(device)
-        self.area = self.area.to(device)
-        return self
+from tree_segmentation import Tree2D, extension as ext
 
 
 # noinspection PyAttributeOutsideInit
-class Tree3Dv2(TreeStructure):
+class Tree3D(TreeStructure):
     _save_list = ['masks', 'scores', 'parent', 'last', 'next', 'first', 'cnt', 'face_mask']
 
     def __init__(
@@ -564,9 +38,9 @@ class Tree3Dv2(TreeStructure):
         assert torch.all(self.area.ge(0))
         self.num_faces = mesh.f_pos.shape[0]
         # tree results
-        self.masks: Tensor = None
-        self.masks_area: Tensor = None
-        self.scores: Tensor = None
+        self.masks: Optional[Tensor] = None
+        self.masks_area: Optional[Tensor] = None
+        self.scores: Optional[Tensor] = None
         self.face_mask = None  # mark unseen faces
         super().__init__(1, device=device, verbose=verbose)
         self.ignore_area = 10
@@ -668,7 +142,7 @@ class Tree3Dv2(TreeStructure):
     def load_2d_results(
         self,
         save_root: Path = None,
-        gt: 'Tree3Dv2' = None,
+        gt: 'Tree3D' = None,
         tri_ids: Tensor = None,
         N_view=-1,
         background_threshold=0.5,
@@ -824,7 +298,7 @@ class Tree3Dv2(TreeStructure):
         return torch.stack([v_p, v_c])
 
     @torch.no_grad()
-    def _build_gt_segmentation(self, gt_tree: 'Tree3Dv2', tri_ids: Tensor, ignore_pixels=100):
+    def _build_gt_segmentation(self, gt_tree: 'Tree3D', tri_ids: Tensor, ignore_pixels=100):
         """build gt 2D segmenation results using ground truth tree"""
         self._masks_2d_packed = False
         self.V = tri_ids.shape[0]
@@ -1160,12 +634,6 @@ class Tree3Dv2(TreeStructure):
         view_P = 1 - torch.exp(view_P)  # shape: [V, C]
         return view_P
 
-    # def calc_loss_2(self, P: Tensor, feats: Tensor = None, eps=1e-7):
-    #     if feats is None:
-    #         feats = P.T @ mask_feats
-    #     masked_feats = feats[:, None] * view_feats[self.view_indices][None, :]
-    #     return 1 - F.cosine_similarity(masked_feats, mask_feats[None, :], dim=-1).mean()
-
     def loss_reg_edge_in_same_view(self, P: Tensor, scores: Tensor):
         """
         Two 2D masks in same view should not map to same 3D mask.
@@ -1180,17 +648,6 @@ class Tree3Dv2(TreeStructure):
         same_view_edges = mask.nonzero(as_tuple=True)
         P_uv = (P[:, same_view_edges[0]] * P[:, same_view_edges[1]]) * scores[:, None]  # shape [K, E]
         return P_uv.sum(dim=0).mean()
-
-    def loss_masks_relation(self, P: Tensor, A: Tensor):
-        """ All 2D masks belonging to the same 3D masks should be connected to each other or cannot see each other
-        m_a, m_b -> M_k,  A[a, b] = 1 or V[a, b] = 0
-      
-        Args:
-            P: shape [M, K]
-            A: shape [M+V, M+V]
-        """
-        in_same = F.linear(P, P)  # P @ P.T # shape [M, M]
-        in_same * torch.maximum(A[:self.M, :self.M], )
 
     def loss_masks_connection(self, P: Tensor, A: Tensor):
         """ All 2D masks belonging to the same 3D masks should be connected to each other, 
@@ -1724,31 +1181,6 @@ class Tree3Dv2(TreeStructure):
         self.masks = self.masks[masks_order]
         self.scores = self.scores[masks_order]
         return indices, new_indices
-
-    @classmethod
-    def convert(cls, other: Tree3D):
-        new = cls(other.mesh, device=other.device, verbose=other.verbose)
-        new.reset()
-        new.resize(other.cnt)
-        other.node_rearrange()
-        new.parent = other.parent
-        new.first = other.first
-        new.next = other.next
-        new.last = other.last
-        new.cnt = other.cnt
-        new.area = other.area
-        new.masks = torch.zeros((other.cnt, other.num_faces + 1), device=other.device, dtype=torch.bool)
-        new.scores = torch.ones((other.cnt,), device=other.device)
-
-        temp = other.face_parent.clone()
-        for nodes in reversed(other.get_levels()):
-            for x in nodes:
-                x = x.item()
-                if x == 0:
-                    continue
-                new.masks[x - 1] = temp == x
-                temp[new.masks[x - 1]] = other.parent[x].to(temp.dtype)
-        return new
 
     def get_2d_tree(self, tri_id: Tensor, ignore=100):
         aux_data = self.get_aux_data(tri_id)

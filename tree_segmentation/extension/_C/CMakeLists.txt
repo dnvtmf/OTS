@@ -1,16 +1,19 @@
-cmake_minimum_required(VERSION 3.8)
-project(bcnn CXX CUDA)
+cmake_minimum_required(VERSION 3.17)
+project(tree_seg_C CXX CUDA)
 
 set(PROJECT_NAME C_ext)
 
 #------ CUDA configure -----------
 set(CUDA_SEPARABLE_COMPILATION ON)
 FIND_PACKAGE(CUDA 9.2 REQUIRED)
+# set(CMAKE_CUDA_ARCHITECTURES "native")
+find_package(CUDAToolkit REQUIRED)
 # include_directories(${CUDA_INCLUDE_DIRS})
 link_directories(${CUDA_TOOLKIT_ROOT_DIR}/lib64)
 
 message(STATUS "Found CUDA ${CUDA_VERSION_STRING} at ${CUDA_TOOLKIT_ROOT_DIR}")
 
+execute_process(COMMAND which python)
 execute_process(COMMAND python3-config --includes OUTPUT_VARIABLE PYTHON_INCLUDE OUTPUT_STRIP_TRAILING_WHITESPACE)
 message(STATUS ${PYTHON_INCLUDE})
 set(CMAKE_CXX_FLAGS ${CMAKE_CXX_FLAGS} ${PYTHON_INCLUDE})
@@ -43,13 +46,14 @@ link_libraries(${TORCH_LIBRARIES})
 link_directories(${TORCH_CMAKE_DIR}/../../lib/)
 link_libraries(torch_python) # to avoid undefined symbol _ZN8pybind116detail11t...
 
-# execute_process(COMMAND python3 -c "from torch.utils.cpp_extension import COMMON_NVCC_FLAGS; print(*COMMON_NVCC_FLAGS)" 
+# execute_process(COMMAND python3 -c "from torch.utils.cpp_extension import COMMON_NVCC_FLAGS; print(*COMMON_NVCC_FLAGS)"
 #   OUTPUT_VARIABLE COMMON_NVCC_FLAGS OUTPUT_STRIP_TRAILING_WHITESPACE)
 # message(STATUS "COMMON_NVCC_FLAGS: ${COMMON_NVCC_FLAGS}")
 # string(REPLACE " " ";" COMMON_NVCC_FLAGS ${COMMON_NVCC_FLAGS}) # string to list
 # set(CUDA_NVCC_FLAGS ${CUDA_NVCC_FLAGS} ${COMMON_NVCC_FLAGS})
 
 add_definitions(-DTORCH_EXTENSION_NAME=${PROJECT_NAME})
+add_definitions(-DCUDA_HAS_FP16=1 -D__CUDA_NO_HALF_OPERATORS__) # avoid more than one operator < match these operands
 #-------------------------- Torch config end ------------------------#
 
 #----------- OpenMP ------------------#
@@ -60,11 +64,18 @@ if(OPENMP_FOUND)
   set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}")
 endif()
 
+#------------ Eigen3 --------------#
+# find_package(Eigen3 REQUIRED)
+# include_directories(${Eigen_INCLUDE_DIRS})
+# link_libraries(${Eigen3_CMAKE_DIR})
+# message(STATUS "use Eigen3 ${Eigen3_CMAK_DIR}")
+
+#----------------- Option ----------------#
 set(CMAKE_BUILD_TYPE "Release")
 set(CMAKE_CXX_FLAGS_DEBUG "$ENV{CXXFLAGS} -O0 -Wall -g -ggdb")
-set(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -O3 -Wall -g -Wno-deprecated-declarations")
+set(CMAKE_CXX_FLAGS_RELEASE "$ENV{CXXFLAGS} -O2 -Wall -g -Wno-deprecated-declarations")
 # set(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
-# set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17") # set in TorchConfig.cmake
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++17") # set in TorchConfig.cmake
 # set(CUDAGEN -gencode arch=compute_60,code=sm_60)
 # set(CUDAGEN ${CUDAGEN} -gencode arch=compute_61,code=sm_61)
 # set(CUDAGEN ${CUDAGEN} -gencode arch=compute_70,code=sm_70)
@@ -75,10 +86,19 @@ LIST(APPEND CUDA_NVCC_FLAGS --ptxas-options=-v)
 # LIST(APPEND CUDA_NVCC_FLAGS --maxrregcount=64)
 LIST(APPEND CUDA_NVCC_FLAGS --compiler-options -fPIC)
 LIST(APPEND CUDA_NVCC_FLAGS -rdc=true)
+LIST(APPEND CUDA_NVCC_FLAGS -Xcompiler -fno-gnu-unique)
 message(STATUS "CUDA_NVCC_FLAGS=${CUDA_NVCC_FLAGS}")
 
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR})
 include_directories(${CMAKE_CURRENT_LIST_DIR}/include)
+include_directories(${CMAKE_CURRENT_LIST_DIR}/third_party/glm)
+
+# 输出cmake所有变量
+# get_cmake_property(_variableNames VARIABLES)
+# list (SORT _variableNames)
+# foreach (_variableName ${_variableNames})
+#     message(STATUS "${_variableName}=${${_variableName}}")
+# endforeach()
 
 ## find sources files
 set(SOURCE_DIR "src")

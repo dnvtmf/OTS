@@ -129,7 +129,7 @@ def compute_shading_normal(
     v0 = mesh.v_pos[mesh.f_pos[:, 0], :]
     v1 = mesh.v_pos[mesh.f_pos[:, 1], :]
     v2 = mesh.v_pos[mesh.f_pos[:, 2], :]
-    face_normals = normalize(torch.cross(v1 - v0, v2 - v0))
+    face_normals = normalize(torch.linalg.cross(v1 - v0, v2 - v0))
     face_normal_indices = torch.arange(0, face_normals.shape[0], dtype=torch.int32, device=v0.device)
     face_normal_indices = face_normal_indices[:, None].repeat(1, 3)
     gb_geometric_normal, _ = dr.interpolate(face_normals[None, ...], rast, face_normal_indices.int())

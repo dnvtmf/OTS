@@ -8,7 +8,7 @@ import torch
 import torch.nn.functional as F
 from torch import Tensor
 
-from tree_segmentation import Tree2D, MaskData, Tree3Dv2, Tree3D
+from tree_segmentation import Tree2D, MaskData, Tree3D, Tree3D
 from tree_segmentation.extension import utils
 
 __all__ = [
@@ -109,7 +109,7 @@ def image_add_mask_boundary(image: np.ndarray, mask: Tensor, color=(1., 0, 0), k
     return image
 
 
-def show_all_levels(image, tree: Union[Tree3D, Tree3Dv2, Tree2D], tri_id=None, dpi=None, width=5., alpha=0.3, **kwargs):
+def show_all_levels(image, tree: Union[Tree3D, Tree3D, Tree2D], tri_id=None, dpi=None, width=5., alpha=0.3, **kwargs):
     is_tree_2d = type(tree).__name__ == 'Tree2D'  # isinstance(tree, Tree2D)
     if is_tree_2d:
         levels = tree.get_levels()

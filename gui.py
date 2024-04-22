@@ -21,8 +21,8 @@ import tree_segmentation.tree_3d_segmentation as ts3
 from tree_segmentation.extension import utils
 from tree_segmentation.extension import ops_3d
 from tree_segmentation.extension.utils import ImageViewer, Viewer3D
-from tree_segmentation import Tree3D, Tree3Dv2, MaskData, Tree2D
-from tree_segmentation.tree_3d import TreeSegment
+from tree_segmentation import Tree2D, Tree3D, MaskData
+from tree_segmentation.tree_segment import TreeSegment
 from tree_segmentation.util import color_mask, image_add_mask_boundary, image_add_points
 
 console = Console()
@@ -52,7 +52,8 @@ class TreeSegmentGUI(TreeSegment):
         self._mode = 'E2D'
         self._edit = False
         self._mesh_history = []  # The path of last 10 loaded meshes
-        self.image_dir = Path('./images').expanduser()
+        self.image_dir = Path(__file__).parent.joinpath('images').expanduser()
+        self.mesh_dir = Path(__file__).parent.joinpath('meshes').expanduser()
         self.image_index = 0
         self.image_paths = []
         self._need_update_2d = False
@@ -207,12 +208,9 @@ class TreeSegmentGUI(TreeSegment):
         self.save_ini()
 
     @property
-    def tree3d(self) -> Union[Tree3D, Tree3Dv2]:
+    def tree3d(self) -> Tree3D:
         if self._tree_3d is None and self._mesh is not None:
-            if self.mode == 'E3D':
-                self._tree_3d = tree_segmentation.Tree3Dv2(self.mesh, device=self.device)
-            else:
-                self._tree_3d = tree_segmentation.Tree3D(self.mesh, device=self.device)
+            self._tree_3d = tree_segmentation.Tree3D(self.mesh, device=self.device)
         return self._tree_3d
 
     @property
@@ -466,7 +464,7 @@ class TreeSegmentGUI(TreeSegment):
 
     @torch.no_grad()
     def rendering(self, Tw2v, fovy, size):
-        if self._loading_mesh:
+        if self._loading_mesh or self._mesh is None:
             return np.zeros((size[1], size[0], 3), dtype=np.float32)
         image, tri_id = self.render_mesh(Tw2v=Tw2v, image_size=size[0])
         image = image.cpu().numpy()
@@ -706,82 +704,6 @@ class TreeSegmentGUI(TreeSegment):
             dpg.get_item_callback('level1')()
         elif self.Tw2v is not None:
             self.view_3d.set_pose(Tv2w=self.Tw2v.inverse())
-
-    def merge_to_3d(self, *, save=None):
-        if self.mask_data is not None and self.tree2d.data is not None:
-            self.tree3d.update(self.tree2d.data, self.aux_data_2d)
-            if save is None:
-                save = dpg.get_value('save_tree_data')
-            if save:
-                num = len(list(self.cache_dir.glob('*.data'))) + 1
-                torch.save(
-                    {
-                        'tree_data': self.tree2d.save(filename=None),
-                        'image': self.image,
-                        'tri_id': self.tri_id,
-                        'Tw2v': self.Tw2v,
-                    }, self.cache_dir.joinpath(f'{num:04d}.data'))
-                dpg.set_item_label('load_data', f"Load ({num})")
-                print(f'[GUI] save data, index={num}')
-            dpg.get_item_callback(f"depth{self.now_level_3d}")()
-            self.show_tree_update()
-
-    def run_tree_3d_cycle(self):
-        N = dpg.get_value('N_cycle')
-        Tw2v = self.tree3d.proposal_camera_pose_cycle(
-            N,
-            radius_range=(dpg.get_value('radius_min'), dpg.get_value('radius_max')),
-            elev_range=(dpg.get_value('theta_min'), dpg.get_value('theta_max')),
-            azim_range=(dpg.get_value('phi_min'), dpg.get_value('phi_max')),
-        )
-        print(f'[GUI] run_tree_3d_cycle: {0}/{N}')
-        for i in range(N):
-            dpg.set_value('progress', f'run_tree_3d_cycle: {i}/{N}')
-            self.new_camera_pose(Tw2v=Tw2v[i])
-            if dpg.get_value('dry_run'):
-                print(f'[GUI] dry run tree_3d_cycle: {i + 1}/{N}')
-                sleep(10 / N)
-                continue
-            self.autorun_tree_seg_2d()
-            self.merge_to_3d()
-            print(f'[GUI] run tree_3d_cycle: {i + 1}/{N}')
-        dpg.set_value('progress', '')
-
-    def run_tree_3d_uniform(self):
-        N = dpg.get_value('N_uniform')
-        Tw2v = self.tree3d.proposal_camera_pose_uniform(
-            N,
-            radius_range=(self.get_value('radius_min'), self.get_value('radius_max')),
-            elev_range=(self.get_value('theta_min'), self.get_value('theta_max')),
-            azim_range=(self.get_value('phi_min'), self.get_value('phi_max')),
-        )
-        print(f'[GUI] run_tree_3d_uniform: {0}/{N}')
-        for i in range(N):
-            dpg.set_value('progress', f'run_tree_3d_uniform: {i}/{N}')
-            self.new_camera_pose(Tw2v=Tw2v[i])
-            if dpg.get_value('dry_run'):
-                print(f'[GUI] dry run tree_3d_uniform: {i + 1}/{N}')
-                sleep(1.0)
-                continue
-            self.autorun_tree_seg_2d()
-            self.merge_to_3d()
-            print(f'[GUI] run tree_3d_uniform: {i + 1}/{N}')
-        dpg.set_value('progress', '')
-
-    def run_tree_3d_grid(self):
-        N = dpg.get_value('N_grid')
-        Tw2v = self.tree3d.proposal_camera_pose_spherical_grid(N, radius_range=(2.5, 3.0))
-        print(Tw2v.shape)
-        for i in range(N):
-            dpg.set_value('progress', f'run_tree_3d_grid: {i}/{N}')
-            self.new_camera_pose(Tw2v=Tw2v[i])
-            if dpg.get_value('dry_run'):
-                print(f'[GUI] dry run run_tree_3d_grid: {i + 1}/{N}')
-                continue
-            self.autorun_tree_seg_2d()
-            self.merge_to_3d()
-            print(f'[GUI] run_tree_3d_grid: {i + 1}/{N}')
-        dpg.set_value('progress', '')
 
     def run_tree_3d_load(self):
         filenames = sorted(list(self.cache_dir.glob('*.data')))
@@ -1360,7 +1282,7 @@ class TreeSegmentGUI(TreeSegment):
             id="choose_mesh",
             width=700,
             height=400,
-            default_path='/home/wan/data/meshes',
+            default_path=self.mesh_dir,
             modal=True,
         ):
             dpg.add_file_extension("Mesh{.obj,.ply}", custom_text='mesh')

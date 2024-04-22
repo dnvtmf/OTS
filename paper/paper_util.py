@@ -1,12 +1,13 @@
 from typing import Union
 from pathlib import Path
+
 import torch
 import numpy as np
 from torch import Tensor
-from tree_segmentation import Tree2D, Tree3Dv2
-from tree_segmentation.extension import utils, ops_3d, Mesh
-import seaborn as sns
 from trimesh.exchange.export import export_mesh
+
+from tree_segmentation import Tree2D, Tree3D
+from tree_segmentation.extension import utils, Mesh
 
 
 def get_cropped(image: Tensor, mask: Tensor):
@@ -45,7 +46,7 @@ def save_2d_masks(save_dir: Path, image: Union[np.ndarray, Tensor], tree2d: Tree
         print(f'Saved 2d level {level} with nodes: {nodes.tolist()}')
 
 
-def get_2d_tree_from_3d(tree3d: Tree3Dv2, tri_id: Tensor):
+def get_2d_tree_from_3d(tree3d: Tree3D, tri_id: Tensor):
     aux_data = tree3d.get_aux_data(tri_id)
     levels = tree3d.get_levels(aux_data)
     masks = []
@@ -60,13 +61,13 @@ def get_2d_tree_from_3d(tree3d: Tree3Dv2, tri_id: Tensor):
     return tree2d
 
 
-def save_3d_view(save_dir: Path, tree3d: Tree3Dv2, image: Union[np.ndarray, Tensor], tri_id: Tensor):
+def save_3d_view(save_dir: Path, tree3d: Tree3D, image: Union[np.ndarray, Tensor], tri_id: Tensor):
     tree2d = get_2d_tree_from_3d(tree3d, tri_id)
     save_2d_masks(save_dir, image, tree2d)
     print(f'There are {tree2d.cnt} masks in the view of tree3d ')
 
 
-def save_3d_part_meshs(save_dir: Path, tree3d: Tree3Dv2, mesh: Mesh):
+def save_3d_part_meshs(save_dir: Path, tree3d: Tree3D, mesh: Mesh):
     utils.dir_create_and_clear(save_dir, '*.obj')
     tree3d.node_rearrange()
     for level, nodes in enumerate(tree3d.get_levels()):

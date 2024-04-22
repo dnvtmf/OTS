@@ -9,7 +9,7 @@ import torch
 from typing import List
 
 from tree_segmentation.extension import utils, ops_3d
-from tree_segmentation import Tree3Dv2, TreeSegmentMetric, Tree2D
+from tree_segmentation import Tree3D, TreeSegmentMetric, Tree2D
 
 from multiprocessing import Process, Queue, set_start_method
 
@@ -31,9 +31,9 @@ def eval_one(que: Queue, result_path: Path, device, glctx, eval_2d=False):
 
     mesh = torch.load(result_path.with_name(f'{result_path.parts[-2]}.mesh_cache'), map_location=device)
     mesh = mesh.to(device)
-    gt = Tree3Dv2(mesh, device=device)
+    gt = Tree3D(mesh, device=device)
     gt.load(result_path.with_name('gt.tree3dv2'))
-    prediction = Tree3Dv2(mesh, device=device)
+    prediction = Tree3D(mesh, device=device)
     prediction.load(result_path)
     m3d.update(prediction, gt)
 
@@ -76,7 +76,7 @@ def eval_one(que: Queue, result_path: Path, device, glctx, eval_2d=False):
 
     gt_seg_path = result_path.with_name('gt_seg.tree3dv2')
     if gt_seg_path.exists():
-        gt_seg = Tree3Dv2(mesh, device=device)
+        gt_seg = Tree3D(mesh, device=device)
         gt_seg.load(gt_seg_path)
         g2d.update(gt_seg, gt)
 
@@ -159,7 +159,7 @@ def main():
         metrics_gs['all'].add_pack(gs_data)
         metrics_gs[cat].add_pack(gs_data)
 
-        print(f'Complete {step+1}/{len(all_results)}')
+        print(f'Complete {step + 1}/{len(all_results)}')
         print(f'3D, {", ".join([f"{k}={v:.4f}" for k, v in metrics_3d["all"].summarize().items()])}')
         print(f'2D, {", ".join([f"{k}={v:.4f}" for k, v in metrics_2d["all"].summarize().items()])}')
         print(f'P , {", ".join([f"{k}={v:.4f}" for k, v in metrics_p["all"].summarize().items()])}')

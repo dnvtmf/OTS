@@ -16,7 +16,7 @@ import tree_segmentation as tree_segmentation
 from segment_anything.build_sam import Sam, build_sam, build_sam_vit_b, build_sam_vit_l
 from segment_anything_fast.build_sam import build_sam_fast, build_sam_fast_vit_b, build_sam_fast_vit_l
 from segment_anything_fast.build_sam import Sam as SamFast
-from tree_segmentation import MaskData, Tree2D, TreePredictor, Tree3Dv2
+from tree_segmentation import MaskData, Tree2D, TreePredictor, Tree3D
 from tree_segmentation.render import render_mesh
 from tree_segmentation.util import get_hash_name
 
@@ -30,7 +30,7 @@ class TreeSegment:
         self.device = torch.device('cuda:0')
         self.glctx = dr.RasterizeCudaContext()
         if self.cfg is None:
-            self.mesh_path = Path('~/data/meshes/tang_table/mesh_0_clean.obj').expanduser()
+            self.mesh_path = Path('./meshes/winter_scene/low_poly_winter_scene.obj').expanduser()
         else:
             self.mesh_path = Path(self.cfg.mesh).expanduser()
         self.cache_root = Path('./results')
@@ -53,7 +53,7 @@ class TreeSegment:
         self._2d_levels: List[Tensor] = []
         self._2d_mask = None
 
-        self._tree_3d: Optional[Tree3Dv2] = None
+        self._tree_3d: Optional[Tree3D] = None
         self._3d_levels: List[Tensor] = []
         self._3d_mask = None
         self._3d_aux_data: Optional[Dict[Union[int, str], Tensor]] = None
@@ -151,9 +151,9 @@ class TreeSegment:
         return self._tree_2d
 
     @property
-    def tree3d(self) -> Tree3Dv2:
+    def tree3d(self) -> Tree3D:
         if self._tree_3d is None:
-            self._tree_3d = tree_segmentation.Tree3Dv2(self.mesh, device=self.device)
+            self._tree_3d = tree_segmentation.Tree3D(self.mesh, device=self.device)
         return self._tree_3d
 
     @property
@@ -204,6 +204,8 @@ class TreeSegment:
                 print(f"[GUI] There are no *.obj files in dir {self.mesh}")
                 return False
         self.mesh_path = obj_path
+        if not obj_path.exists():
+            return False
         self.cache_dir = self.cache_root.joinpath(get_hash_name(self.mesh_path))
         self.cache_dir.mkdir(exist_ok=True)
 

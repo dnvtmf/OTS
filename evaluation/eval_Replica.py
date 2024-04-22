@@ -17,7 +17,7 @@ from tqdm import tqdm
 
 from evaluation.util import get_predictor, predictor_options, run_predictor
 from tree_segmentation import (
-    Tree3D, Tree3Dv2, choose_best_views, random_camera_position, render_mesh,
+    Tree3D, Tree3D, choose_best_views, random_camera_position, render_mesh,
 )
 from tree_segmentation.extension import Mesh, ops_3d, utils
 from tree_segmentation.metric import TreeSegmentMetric
@@ -115,7 +115,7 @@ def load_mesh_and_gt(data_dir: Path, cache_dir: Path, force=False):
     mesh.float()
 
     if not force and cache_dir.joinpath('gt.tree3dv2').exists():
-        gt = Tree3Dv2(mesh=mesh, device=device)
+        gt = Tree3D(mesh=mesh, device=device)
         gt.load(cache_dir.joinpath('gt.tree3dv2'))
         print('Load GT from', cache_dir.joinpath('gt.tree3dv2'))
     else:
@@ -142,7 +142,7 @@ def load_mesh_and_gt(data_dir: Path, cache_dir: Path, force=False):
             if mask_i.any():
                 masks.append(mask_i)
 
-        gt = Tree3Dv2(mesh, device=device)
+        gt = Tree3D(mesh, device=device)
         gt.masks = torch.zeros((len(masks), gt.num_faces + 1), device=device, dtype=torch.bool)
         gt.scores = torch.ones((len(masks),), device=device)
         gt.resize(len(masks) + 1)
@@ -213,7 +213,7 @@ def load_semantic_gt(data_dir: Path, mesh: Mesh, cache_dir: Path):
     # console.print(show_tree)
     # gt.print_tree()
     # gt.save(cache_dir.joinpath('gt2.tree3d'))
-    gt_v2 = Tree3Dv2.convert(gt)
+    gt_v2 = Tree3D.convert(gt)
     gt_v2.save(cache_dir.joinpath('gt2.tree3dv2'))
     return gt_v2
 
@@ -326,7 +326,7 @@ def main():
         save_path = cache_dir.joinpath('my.tree3dv2')
     else:
         save_path = cache_dir.joinpath(args.filename).with_suffix('.tree3dv2')
-    tree3d = Tree3Dv2(mesh, device=device)
+    tree3d = Tree3D(mesh, device=device)
     if not args.force_3d and save_path.exists():
         tree3d.load(save_path)
     else:

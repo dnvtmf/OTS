@@ -7,7 +7,7 @@ from torch import Tensor
 import torch.nn.functional as F
 from scipy.optimize import linear_sum_assignment
 
-from tree_segmentation import Tree2D, Tree3D, Tree3Dv2, TreeStructure
+from tree_segmentation import Tree2D, Tree3D, TreeStructure
 
 
 class TreeSegmentMetric:
@@ -52,10 +52,7 @@ class TreeSegmentMetric:
             setattr(self, k, getattr(self, k) + v)
 
     @torch.no_grad()
-    def update(self,
-               prediction: Union[Tree3D, Tree2D, Tree3Dv2],
-               gt: Union[Tree3D, Tree2D, Tree3Dv2],
-               return_match=False):
+    def update(self, prediction: Union[Tree2D, Tree3D], gt: Union[Tree2D, Tree3D], return_match=False):
         if gt.cnt == 0:
             return
         self.num_gt += sum(len(x) for x in gt.get_levels()) - 1
@@ -139,7 +136,7 @@ class TreeSegmentMetric:
         # return match, match_iou, matched, matched_iou
 
     def calc_IoU_3d(self, prediction, gt):
-        # type: (Union[Tree3D, Tree3Dv2],  Union[Tree3D, Tree3Dv2])-> Tuple[Tensor, Tensor, Tensor]
+        # type: (Union[Tree3D, Tree3D],  Union[Tree3D, Tree3D])-> Tuple[Tensor, Tensor, Tensor]
         # get prediction masks
         assert prediction.num_faces == gt.num_faces, f"Only can compare the results of same mesh"
         indices_pd = torch.cat(prediction.get_levels(), dim=0)[1:] - 1  # do not care root
@@ -198,7 +195,7 @@ class TreeSegmentMetric:
                 masks_pd = F.interpolate(masks_pd[None].float(), masks_gt.shape[1:3], mode='nearest')[0]
             else:
                 masks_gt = F.interpolate(masks_gt[None].float(), masks_pd.shape[1:3], mode='nearest')[0]
-        masks_gt, masks_pd = masks_gt.flatten(1,), masks_pd.flatten(1,)
+        masks_gt, masks_pd = masks_gt.flatten(1, ), masks_pd.flatten(1, )
         # get IoU
         area_pd = masks_pd.sum(dim=1)
         area_gt = masks_gt.sum(dim=1)
@@ -206,7 +203,7 @@ class TreeSegmentMetric:
         IoU = interscection / (area_pd[:, None] + area_gt[None, :] - interscection).clamp_min(self.eps)
         return IoU, indices_pd, indices_gt
 
-    def calc_tree_structure_score(self, p: Union[Tree2D, Tree3D, Tree3Dv2], indices: Tensor = None):
+    def calc_tree_structure_score(self, p: Union[Tree2D, Tree3D, Tree3D], indices: Tensor = None):
         if indices is None:
             indices = torch.cat(p.get_levels(), dim=0)[1:] - 1  # do not care root
             order = torch.argsort(p.scores[indices], descending=True)  # sorted by score
@@ -256,7 +253,7 @@ class TreeSegmentMetric:
                     print(mask_u.sum(), mask_c.sum())
                     print(areas)
                 assert abs(in_cu - (In[c - 1, u - 1] if u > 0 else 1)) < 1e-5, \
-                    f"{in_cu- (In[c - 1, u - 1] if u > 0 else 1)}"
+                    f"{in_cu - (In[c - 1, u - 1] if u > 0 else 1)}"
                 s += in_cu
 
                 # cmp[c - 1] = (mask_u * mask_c).sum() / mask_c.sum().clamp_min(self.eps)
@@ -268,7 +265,7 @@ class TreeSegmentMetric:
                     mask_v = p.masks[indices[v - 1]]
                     inter_ = (mask_v * mask_c).sum()
                     iou = inter_ / (mask_c.sum() + mask_v.sum() - inter_).clamp_min(self.eps)
-                    assert (IoU[c - 1, v - 1] - iou).abs() < 1e-5, f"{IoU[c-1, v-1]} vs. {iou}"
+                    assert (IoU[c - 1, v - 1] - iou).abs() < 1e-5, f"{IoU[c - 1, v - 1]} vs. {iou}"
                     total += 1 - iou
                     cnt += 1
                 s += 1 if cnt == 0 else total / cnt
@@ -316,7 +313,7 @@ class TreeSegmentMetric:
             # assert abs(now - check_score) < 1e-4, f"{abs(now - check_score)}"
         return scores * 0.5
 
-    def calc_tree_structure_score_2(self, p: Union[Tree2D, Tree3D, Tree3Dv2], indices: Tensor = None):
+    def calc_tree_structure_score_2(self, p: Union[Tree2D, Tree3D, Tree3D], indices: Tensor = None):
         if indices is None:
             indices = torch.cat(p.get_levels(), dim=0)[1:] - 1  # do not care root
             # order = torch.argsort(p.scores[indices], descending=True)  # sorted by score

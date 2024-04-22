@@ -17,7 +17,7 @@ from torch import Tensor
 from tqdm import tqdm
 
 from evaluation.util import get_predictor, predictor_options, run_predictor
-from tree_segmentation import Tree2D, Tree3D, Tree3Dv2, TreePredictor, choose_best_views, render_mesh
+from tree_segmentation import Tree2D, Tree3D, Tree3D, TreePredictor, choose_best_views, render_mesh
 from tree_segmentation.extension import Mesh, ops_3d, utils
 from tree_segmentation.metric import TreeSegmentMetric
 
@@ -90,7 +90,7 @@ def get_mesh_and_gt_tree(obj_dir: Path, cache_dir: Path, device):
     assert len(meta_parts) == 1
     get_ground_truth(meta_parts[0], gt, show_tree, part_names, part_map)
     # gt.save(cache_dir.joinpath('gt.tree3d'))
-    gt_v2 = Tree3Dv2.convert(gt)
+    gt_v2 = Tree3D.convert(gt)
     gt_v2.save(cache_dir.joinpath('gt.tree3dv2'))
     print('Save gt result')
     # console.print(show_tree)
@@ -330,7 +330,7 @@ def eval_one(
 
     if 1 and cache_dir.joinpath('gt.tree3dv2').exists():
         mesh = torch.load(cache_dir.joinpath(shape_root.stem + '.mesh_cache'), map_location=device)
-        gt = Tree3Dv2(mesh, device=device)
+        gt = Tree3D(mesh, device=device)
         gt.load(cache_dir.joinpath('gt.tree3dv2'))
     else:
         mesh, gt = get_mesh_and_gt_tree(shape_root, cache_dir, device)
@@ -371,7 +371,7 @@ def eval_one(
         save_path = cache_dir.joinpath(args.filename)
     if save_path.suffix != '.tree3dv2':
         save_path = cache_dir.joinpath(save_path.name + '.tree3dv2')
-    tree3d = Tree3Dv2(mesh, device=device)
+    tree3d = Tree3D(mesh, device=device)
     if not args.force_3d and save_path.exists():
         tree3d.load(save_path)
     else:

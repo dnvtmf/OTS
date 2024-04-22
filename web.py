@@ -15,11 +15,10 @@ from tqdm import tqdm
 
 from segment_anything.build_sam import Sam
 from semantic_sam import SemanticSAM
-from tree_segmentation import Tree3Dv2
+from tree_segmentation import Tree3D
 from tree_segmentation.extension import utils, ops_3d
-from tree_segmentation.tree_3d import TreeSegment
+from tree_segmentation.tree_segment import TreeSegment
 from tree_segmentation.util import get_colored_masks, search_folder, get_hash_name
-from pprint import pprint
 
 
 # 随机视角
@@ -290,7 +289,7 @@ class WebUI(TreeSegment):
                 print(f"Web: convert to glb formart, save to {mesh_path}")
         assert mesh_path.is_file()
         self.load_mesh(obj_path=self.mesh_path)  # 加载mesh
-        self.tree_3d = Tree3Dv2(self.mesh, self.device, verbose=1)
+        self.tree_3d = Tree3D(self.mesh, self.device, verbose=1)
         return mesh_path
 
     def load_tree_seg_3d(self):
@@ -304,7 +303,7 @@ class WebUI(TreeSegment):
         self.cache_tree3d = self.cache_web.joinpath(f'my_{self.mesh_name}.tree3dv2')
         if not self.cache_tree3d.exists():
             print("[Web] Tree 3D not exists, loading Tree 2D data.")
-            self.tree_3d = Tree3Dv2(self.mesh, self.device, verbose=1)
+            self.tree_3d = Tree3D(self.mesh, self.device, verbose=1)
             self.tree_3d.load_2d_results(self.cache_2d_all, pack=True)  # 读取.data文件
             print("[Web] Tree 3D building graph...")
             A = self.tree_3d.build_all_graph()

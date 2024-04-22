@@ -1,6 +1,6 @@
-# TreeSeg
+# OTS
 
-Tree Segmentation for 3D
+The offical implementaion of "Open-set Hierarchical Semantic Segmentation for 3D Scene".
 
 ## Install
 
@@ -28,7 +28,8 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [Sematic-SAM](https://github.com/UX-Decoder/Semantic-SAM/tree/main)
 
 ## TODO
-- [ ] [3D] 只有一个mask的情况 
+
+- [ ] [3D] 只有一个mask的情况
 - [ ] [3D] 改正match loss
 - [ ] [3D] Replica 选择视角
 - [ ] [3D] Replica 使用高清图片
@@ -46,3 +47,9 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [ ] [3D] 简化或细分Mesh
 - [ ] [3D] 合并Tree3D和Tree3Dv2
 - [ ] [2D] 使用RLE压缩Tree2D
+
+## Citation
+
+```text
+
+```
