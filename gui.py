@@ -1074,6 +1074,7 @@ class TreeSegmentGUI(TreeSegment):
             dpg.bind_item_theme('E2D', self.default_theme)
             dpg.bind_item_theme('E3D', self.default_theme)
             dpg.bind_item_theme('S3D', self.default_theme)
+            dpg.hide_item('S3D')
 
             # dpg.add_text('Model')
             dpg.add_button(label=self._model_type, tag='change_model', height=30)

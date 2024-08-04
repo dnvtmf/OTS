@@ -140,7 +140,8 @@ def main():
     predictor, device = load_predictor(args)
 
     if image_path.is_dir():
-        for img_path in tqdm(list(image_path.glob('*.*'))):
+        image_paths = sorted(list(image_path.glob('*.*')))
+        for img_path in tqdm(image_paths):
             if img_path.suffix in utils.image_extensions:
                 try:
                     deal_one_image(args, predictor, device, img_path, save_dir)
