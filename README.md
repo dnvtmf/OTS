@@ -27,29 +27,14 @@ Download `swinl_only_sam_many2many.pth` and `swint_only_sam_many2many.pth` from 
 - [Segment Anything](https://github.com/facebookresearch/segment-anything)
 - [Sematic-SAM](https://github.com/UX-Decoder/Semantic-SAM/tree/main)
 
-## TODO
-
-- [ ] [3D] 只有一个mask的情况
-- [ ] [3D] 改正match loss
-- [ ] [3D] Replica 选择视角
-- [ ] [3D] Replica 使用高清图片
-- [ ] [2D] metric set ignore nodes
-- [ ] [2D] run experiment on PASCAL VOC/Cityscapes
-- [ ] [3D] 基于边的融合方法
-- [ ] [3D] add post-propocess
-- [ ] [GUI] 固定渲染颜色
-- [ ] [GUI] Edit 2D: 编辑模式
-- [ ] [GUI] Edit 2D: 右键单击显示上一层和下一层
-- [ ] [GUI] 合并save和load, 增加删除按钮
-- [ ] [3D] Tree3Dv2._get_masks 使用CUDA实现
-- [ ] [Paper] 补充材料
-- [ ] [Paper] Demo视频
-- [ ] [3D] 简化或细分Mesh
-- [ ] [3D] 合并Tree3D和Tree3Dv2
-- [ ] [2D] 使用RLE压缩Tree2D
-
 ## Citation
 
 ```text
+@InProceedings{icme24_ots,
+  title = 	 {Open-set Hierarchical Semantic Segmentation for 3D Scene},
+  author =       {Wan, Diwen and Tang, Jiaxiang and Wang, Jingbo and Chen, Xiaokang and Gan, Lingyun and Zeng, Gang},
+  booktitle = 	 {IEEE Conference on Multimedia Expo 2024},
+  year = 	 {2024},
+}
 
 ```
